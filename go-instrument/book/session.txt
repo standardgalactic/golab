@@ -1,0 +1,28 @@
+$ golab discover papers
+source          3  papers/a.txt
+summary         1  papers/b.summary.md
+source         23  papers/b.tex
+$ golab verify papers
+ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad  papers/a.txt
+2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881  papers/b.summary.md
+9f1c4eec1f3f6ab16d74135508a6667bb4ec027155c506bad8dfca807899f0a8  papers/b.tex
+$ golab run papers sh -c 'echo built'
+built
+[succeeded, exit 0, 2ms]
+$ golab run papers sh -c 'exit 4'
+[failed, exit 4, 2ms]
+golab: program failed
+(exit status 1)
+$ golab audit
+ledger holds: 3 records
+$ cat golab-ledger.jsonl
+{"seq":1,"time":"2026-10-25T16:56:21Z","action":"verify","subject":"papers","detail":{"failed":"0","found":"3","verified":"3"},"prev":"","digest":"15846b57cae5f478de8360d3bf9256c2bcabb03b25ed3d2156e6c646dfe422a0"}
+{"seq":2,"time":"2026-10-25T16:56:21Z","action":"run","subject":"sh -c echo built","detail":{"elapsed":"2ms","exit":"0","outcome":"succeeded"},"prev":"15846b57cae5f478de8360d3bf9256c2bcabb03b25ed3d2156e6c646dfe422a0","digest":"a757eb56c05dcb6202a94f8f476b08d297e60a5fe35cfab0a7335c36230d6e11"}
+{"seq":3,"time":"2026-10-25T16:56:21Z","action":"run","subject":"sh -c exit 4","detail":{"elapsed":"2ms","exit":"4","outcome":"failed"},"prev":"a757eb56c05dcb6202a94f8f476b08d297e60a5fe35cfab0a7335c36230d6e11","digest":"97bde7e4cb19c9f91a81abb308e785e9a1af9be0aef5fc579625421101b50dd3"}
+$ sed -i '1s/verify/verifY/' golab-ledger.jsonl
+$ golab audit
+golab: record 1 digest mismatch: ledger chain broken
+(exit status 1)
+$ golab run papers sh -c 'echo again'
+golab: refusing to append: record 1 digest mismatch: ledger chain broken
+(exit status 1)

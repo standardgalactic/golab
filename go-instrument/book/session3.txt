@@ -1,0 +1,23 @@
+$ go run ./examples/ch10_race
+counter: 1000
+counter: 998
+counter: 995
+counter: 988
+counter: 983
+$ go run -race ./examples/ch10_race
+==================
+WARNING: DATA RACE
+Read at 0x00c000112078 by goroutine 10:
+  main.main.func1()
+      examples/ch10_race/main.go:15 +0x84
+
+Previous write at 0x00c000112078 by goroutine 7:
+  main.main.func1()
+      examples/ch10_race/main.go:15 +0x96
+
+Goroutine 10 (running) created at:
+  main.main()
+      examples/ch10_race/main.go:13 +0x78
+
+[remainder of the report omitted]
+exit status 66

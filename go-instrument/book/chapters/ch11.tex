@@ -1,0 +1,56 @@
+\chapter{Contexts, Select, and Cancellation}
+\label{ch:contexts}
+
+\section{The Problem of Stopping}
+
+Starting concurrent work is easy and stopping it is hard. A goroutine cannot be killed from outside, as Chapter~\ref{ch:goroutines} noted, so any work that may need to be abandoned must be written to notice a request to stop and to return of its own accord. The request has to travel from whoever wants the work stopped to whoever is doing it, and the path may pass through several layers of functions and several goroutines, none of which knows about the others. The standard library solves the problem with a single type, \gocode{context.Context}, which carries a cancellation signal and an optional deadline down through a program, and which has become the first parameter of nearly every function in Go that can block.
+
+A context is created from another. The function \gocode{context.Background} returns an empty context that is never cancelled and serves as the root. The function \gocode{context.WithCancel} derives from a parent a child context together with a function that cancels it, and \gocode{context.WithTimeout} derives a child that cancels itself when a duration has elapsed. Cancellation flows downward: cancelling a context cancels every context derived from it, and cancelling a child leaves the parent untouched. The tree of contexts therefore mirrors the tree of work, and cancelling a branch stops the work beneath it and nothing else.
+
+Two methods are used to observe a context. The method \gocode{Done} returns a channel that is closed when the context is cancelled, which makes cancellation something a goroutine can wait for with the \gocode{select} statement described below. The method \gocode{Err} returns \gocode{nil} while the context is live and afterwards returns \gocode{context.Canceled} or \gocode{context.DeadlineExceeded}, saying why it ended, and it is the cheaper form when the code only needs to ask whether to continue. The runner of Chapter~\ref{ch:processes} already used a context with a timeout to bound a child process, and the pool applies the same idea to a whole batch of files.
+
+\section{The Select Statement}
+
+A goroutine often needs to wait for more than one thing, such as a result, a cancellation, or a timer, and to act on whichever happens first. The \gocode{select} statement does this. It lists several channel operations, blocks until one of them can proceed, and runs the corresponding branch. If several can proceed at the same moment, the runtime picks one at random, so a program must not depend on an order among simultaneously ready cases, and a \gocode{default} branch, if present, runs immediately when none is ready, which turns the statement into a non-blocking poll.
+
+The tests of the pool use \gocode{select} where a bounded wait is needed. In \texttt{Test\-Workers\-Really\-Run\-In\-Parallel}, the test waits for each of four workers to announce that it has arrived at the verification function, and each wait is a \gocode{select} between the arrival channel and a timer created by \gocode{time.After}. If the workers were serialized, the second arrival would never come, the timer would fire after five seconds, and the test would fail with a message that says how many workers were running. A test that waited on the channel alone would hang forever in that case, and a hung test is a poor way to report a defect.
+
+\section{The Pool's Cancellation Contract}
+
+The pool takes a context as its first argument, in the usual position, and its documentation states what cancellation does. Files that no worker has started when the context ends are not verified, and each of them receives the context's error as its outcome. A verification already under way is not interrupted. Two decisions are contained in that sentence.
+
+The first is that cancellation does not shorten the result. The feeder loop continues to send every index even after the context ends, and the workers, seeing the cancelled context, record the cancellation as the outcome of each remaining file instead of verifying it. The alternative design would stop feeding at the first sign of cancellation and return a short slice, or a slice with empty elements for the files never reached. Either would leave the caller to work out which files had been skipped, and for a tool whose purpose is an honest record, a silent omission is the worst kind of result. The choice is the one made in Chapter~\ref{ch:errors} for partial failure: every file ends up with an outcome, and the outcome says what happened, which in this case is that it was not attempted because time ran out.
+
+The second decision is that a running verification is not interrupted, because \gocode{artifact.Verify} takes no context and reads the file to the end. For ordinary files the delay is small, and for a very large file on a slow disk it is not. The honest statement is that the timeout bounds when new work is started and does not bound when the call returns, and the documentation says so. Making verification itself cancellable is straightforward in principle, since the copy loop can check the context between blocks, and it is the first exercise of this chapter.
+
+\golisting{internal/pool/pool_test.go}{Tests for the worker pool, repeated for reference.}{lst:pool-test-again}
+
+Two tests pin down the contract. \texttt{Test\-Cancelled\-Context\-Still\-Reports\-Every\-File} cancels the context before the call and checks that all twenty files come back with \gocode{context.Canceled} and that the verification function was never invoked. \gocode{TestCancellationMidRun} is more delicate. It uses one worker and a verification function whose first call cancels the context through a \gocode{sync.Once}, and it checks that exactly one file was verified and the other forty-nine were cancelled. The test is deterministic only because it uses one worker. With several workers, the number of files already in progress when the cancellation lands varies from run to run, and a test that asserted an exact count would be flaky. The contract promises only that every file has an outcome and that files not started are cancelled, and the tests assert precisely that and no more.
+
+\section{Cancellation in the Command}
+
+The \gocode{verify} command exposes the mechanism through the flag \gocode{-timeout}. When it is given, the command derives a context with that timeout and passes it to the pool. The flag \gocode{-workers} sets the size of the pool, defaulting to the number of processors, and the flag \gocode{-each} asks for one ledger record per file, which is the subject of the next chapter.
+
+\lstinputlisting[style=shellstyle,caption={Concurrent verification, per-file records, and a timeout that expires at once.},label={lst:session5}]{session5.txt}
+
+The transcript in Listing~\ref{lst:session5} shows all three effects. The first command verifies six files with four workers and writes a record for each file followed by the aggregate record, seven in all, and the audit confirms that the chain holds. The order in which the per-file records appear is not the order of the files: \texttt{d04} precedes \texttt{d03} and \texttt{d02}, because the ledger records files in the order the workers finished them, and the order of completion is a property of the scheduler that the program does not control. The printed digests, by contrast, are in input order, because the command prints from the result slice after the pool has returned. The two orders serve different readers, and the difference is intended. The ledger is a history of what happened, and the terminal output is a report in a stable order.
+
+The second command sets a timeout of one nanosecond, which expires before any work can start. All six files come back with the deadline error, the command exits with status 1, and the aggregate record in the ledger states that six files failed. The attempt is on the record. An operator who looks at the ledger a week later sees that a verification was requested, that nothing was verified, and why, which is the same principle that governed the ordering of the \gocode{verify} command in Chapter~\ref{ch:errors}.
+
+\section*{Exercises}
+
+\begin{exercise}
+Change \gocode{artifact.Verify} to accept a context and to check it between blocks of a fixed size while hashing. Choose the block size and justify it, and write a test that cancels a verification of a large file part-way through. Decide what the returned error should say about the bytes already read.
+\end{exercise}
+
+\begin{exercise}
+Write a version of the feeder that stops sending as soon as the context is cancelled and fills the unsent slots with the context's error afterwards. Show that it satisfies the same contract, and identify which design is easier to reason about.
+\end{exercise}
+
+\begin{exercise}
+Replace the use of \gocode{ctx.Err()} in the worker with a \gocode{select} on \gocode{ctx.Done()} and a \gocode{default} case. Explain whether the two behave differently, and why one might prefer either.
+\end{exercise}
+
+\begin{exercise}
+Make the workers' error for a cancelled file wrap \gocode{context.Canceled} or \gocode{context.DeadlineExceeded} with the path of the file, and show that \gocode{errors.Is} still recognizes the cause.
+\end{exercise}

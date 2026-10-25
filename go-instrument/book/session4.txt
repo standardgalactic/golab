@@ -1,0 +1,12 @@
+$ for i in $(seq 20); do golab run papers true & done; wait
+$ wc -l < golab-ledger.jsonl
+5
+$ golab audit
+golab: record 5 has seq 4: ledger chain broken
+(exit status 1)
+$ cut -c1-9 golab-ledger.jsonl
+{"seq":1,
+{"seq":2,
+{"seq":3,
+{"seq":4,
+{"seq":4,

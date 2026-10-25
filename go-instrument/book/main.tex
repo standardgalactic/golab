@@ -1,0 +1,141 @@
+\documentclass[11pt,twoside]{book}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{mathpazo}
+\usepackage{courier}
+\usepackage{microtype}
+\usepackage[margin=1.25in]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{booktabs}
+\usepackage[hidelinks]{hyperref}
+
+\definecolor{codebg}{gray}{0.96}
+\definecolor{codecomment}{rgb}{0.30,0.42,0.30}
+\definecolor{codekeyword}{rgb}{0.10,0.20,0.55}
+\definecolor{codestring}{rgb}{0.55,0.22,0.12}
+
+\lstdefinelanguage{GoLang}{
+  morekeywords={break,case,chan,const,continue,default,defer,else,fallthrough,for,func,go,goto,if,import,interface,map,package,range,return,select,struct,switch,type,var},
+  morekeywords=[2]{bool,byte,error,float64,int,int64,string,rune,uint8,any,true,false,nil,iota},
+  morecomment=[l]{//},
+  morecomment=[s]{/*}{*/},
+  morestring=[b]",
+  morestring=[b]`,
+  sensitive=true
+}
+
+\lstdefinestyle{gostyle}{
+  language=GoLang,
+  basicstyle=\ttfamily\small,
+  keywordstyle=\color{codekeyword}\bfseries,
+  keywordstyle=[2]\color{codekeyword},
+  commentstyle=\color{codecomment}\itshape,
+  stringstyle=\color{codestring},
+  backgroundcolor=\color{codebg},
+  frame=single,
+  rulecolor=\color{black!25},
+  numbers=left,
+  numberstyle=\tiny\color{black!50},
+  numbersep=8pt,
+  tabsize=4,
+  showstringspaces=false,
+  breaklines=true,
+  breakatwhitespace=false,
+  columns=fullflexible,
+  keepspaces=true,
+  captionpos=b,
+  xleftmargin=1.6em,
+  framexleftmargin=1.2em,
+  aboveskip=1.2em,
+  belowskip=0.8em
+}
+
+\lstdefinestyle{shellstyle}{
+  basicstyle=\ttfamily\small,
+  backgroundcolor=\color{codebg},
+  frame=single,
+  rulecolor=\color{black!25},
+  showstringspaces=false,
+  breaklines=true,
+  columns=fullflexible,
+  keepspaces=true,
+  captionpos=b,
+  aboveskip=1.2em,
+  belowskip=0.8em
+}
+
+% Source file listing: path relative to the golab module, caption, label.
+\newcommand{\golisting}[3]{%
+  \lstinputlisting[style=gostyle,caption={#2},label={#3}]{../golab/#1}}
+
+\theoremstyle{plain}
+\newtheorem{proposition}{Proposition}[chapter]
+\theoremstyle{definition}
+\newtheorem{definition}{Definition}[chapter]
+\newtheorem{exercise}{Exercise}[chapter]
+\theoremstyle{remark}
+\newtheorem*{remark}{Remark}
+
+\newcommand{\golab}{\texttt{golab}}
+\newcommand{\gocode}[1]{\texttt{#1}}
+
+\title{\textbf{Go as an Instrument of Continuation}\\[0.6em]
+\large From Local Workflows to Concurrent Systems, Containers, and Governed Services}
+\author{Flyxion\\Independent Researcher}
+\date{October 2026}
+
+\setlength{\emergencystretch}{2.5em}
+
+\begin{document}
+
+\frontmatter
+\maketitle
+\tableofcontents
+
+\include{chapters/preface}
+
+\mainmatter
+
+\part{Local Computation}
+\include{chapters/ch01}
+\include{chapters/ch02}
+\include{chapters/ch03}
+\include{chapters/ch04}
+\include{chapters/ch05}
+\include{chapters/ch06}
+
+\part{Governed Workflows}
+\include{chapters/ch07}
+\include{chapters/ch08}
+\include{chapters/ch09}
+
+\part{Concurrent Execution}
+\include{chapters/ch10}
+\include{chapters/ch11}
+\include{chapters/ch12}
+
+\part{Memory and Reconstruction}
+\include{chapters/ch13}
+\include{chapters/ch14}
+\include{chapters/ch15}
+
+\part{Distributed Systems}
+\include{chapters/ch16}
+\include{chapters/ch17}
+\include{chapters/ch18}
+
+\part{Experimental Systems}
+\include{chapters/ch19}
+\include{chapters/ch20}
+\include{chapters/ch21}
+\include{chapters/ch22}
+
+\include{chapters/conclusion}
+
+\appendix
+\include{chapters/appendix}
+
+\end{document}

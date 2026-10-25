@@ -1,0 +1,15 @@
+$ mount -t tmpfs -o size=8k none /mnt/small   # a filesystem that holds 8192 bytes
+$ # append until the filesystem is full, with the ledger as it was before the repair
+appends that succeeded: 29
+error from the failing append:
+golab: write ledger: write /mnt/small/l.jsonl: no space left on device
+ledger size in bytes: 8192
+$ golab audit
+golab: ledger line 30: unexpected end of JSON input
+$ # the same, with the repaired Append
+appends that succeeded: 29
+error from the failing append:
+golab: write ledger: write /mnt/small/l.jsonl: no space left on device
+ledger size in bytes: 8134
+$ golab audit
+ledger holds: 29 records

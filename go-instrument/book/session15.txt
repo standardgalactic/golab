@@ -1,0 +1,48 @@
+$ golab manifest -name checks -params n=2,mode=full -out checks.manifest.json papers
+manifest checks: 2 inputs, digest 3c7fff29c42ce866b73a782ee03b8f41692bcf292d944c2ba8efde3765cac09e
+$ cat checks.manifest.json
+{
+ "schema": 1,
+ "name": "checks",
+ "params": {
+  "mode": "full",
+  "n": "2"
+ },
+ "go": "go1.24.7",
+ "module": "golab",
+ "settings": {
+  "-buildmode": "exe",
+  "-compiler": "gc",
+  "CGO_CFLAGS": "",
+  "CGO_CPPFLAGS": "",
+  "CGO_CXXFLAGS": "",
+  "CGO_ENABLED": "1",
+  "CGO_LDFLAGS": "",
+  "DefaultGODEBUG": "asynctimerchan=1,gotestjsonbuildtext=1,gotypesalias=0,httplaxcontentlength=1,httpmuxgo121=1,httpservecontentkeepheaders=1,multipathtcp=0,randseednop=0,rsa1024min=0,tls10server=1,tls3des=1,tlsmlkem=0,tlsrsakex=1,tlsunsafeekm=1,winreadlinkvolume=0,winsymlink=0,x509keypairleaf=0,x509negativeserial=1,x509rsacrt=0,x509usepolicies=0",
+  "GOAMD64": "v1",
+  "GOARCH": "amd64",
+  "GOOS": "linux"
+ },
+ "inputs": [
+  {
+   "path": "a.txt",
+   "sha256": "b6a98d9ce9a2d9149288fa3df42d377c3e42737afdcdaf714e33c0a100b51060",
+   "size": 6
+  },
+  {
+   "path": "b.txt",
+   "sha256": "f2c82decdd7181cf98945929a62598db7e6b477e11f6e0eb0ae97020eff151ad",
+   "size": 5
+  }
+ ]
+}
+$ golab manifest -check checks.manifest.json papers
+manifest matches
+$ echo gamma > papers/c.txt; echo changed > papers/b.txt
+$ golab manifest -check checks.manifest.json papers
+input changed: b.txt
+input added: c.txt
+golab: 2 differences from the saved manifest
+(exit status 1)
+$ cut -d, -f1,3,4 golab-ledger.jsonl
+{"seq":1,"action":"manifest","subject":"checks"

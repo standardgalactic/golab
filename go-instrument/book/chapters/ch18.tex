@@ -1,0 +1,60 @@
+\chapter{Containers and the Edge of the Process}
+\label{ch:containers}
+
+\section{What a Container Is}
+
+The service runs on the machine where it was started, with that machine's files, network, and users visible to it. A container changes what the process can see and use without changing the process itself. It is not a virtual machine, which runs its own kernel, but an ordinary process of the host that the kernel has been told to treat specially. Three features of the Linux kernel do most of the work, and the others, such as the image format and the tooling, are conveniences built on them.
+
+The first is the \emph{namespace}. A namespace gives a process its own view of one kind of global resource. A process in a new process-identifier namespace sees itself as process number 1 and cannot see the processes outside. A new host-name namespace lets it set a host name that the rest of the machine does not share. A new network namespace gives it an empty set of network interfaces, and a new mount namespace gives it a private table of mounted filesystems. The program \texttt{unshare} runs a command in new namespaces, and the transcript below was produced with it, on a host running a Linux kernel.
+
+\lstinputlisting[style=shellstyle,caption={Namespaces demonstrated with \texttt{unshare}.},label={lst:session8}]{session8.txt}
+
+The transcript shows each kind in turn. In a new process namespace the listing of processes contains only the command itself, as number 1, and the namespace identifiers read from the process's own entry differ between the host and the child. In a new host-name namespace the name can be changed and the host's name is untouched. In a new network namespace the only interface is the loopback. In a new mount namespace a filesystem mounted inside is not visible outside, and the final count of matching entries on the host is zero. These are the isolations that container tools combine.
+
+The last two entries of the transcript show a consequence that matters to the service. An ordinary process that receives the terminate signal and has not arranged to handle it is ended. The first process of a process namespace is treated differently by the kernel, which delivers to it only the signals for which it has installed a handler, and a signal that cannot be caught and the kill signal are the exceptions. The same command that was terminated outside the namespace was still running after the terminate signal inside it, and was ended only by the kill signal. A service that runs as the first process of a container and does not handle the terminate signal will ignore the request to stop that container tools send first, and will be killed after a grace period without having finished anything. The \gocode{serve} command installs a handler for the signal through \gocode{signal.NotifyContext}, as Chapter~\ref{ch:http} described, and the behaviour shown here is the reason that handler is necessary and not merely tidy.
+
+The second feature is the \emph{control group}, which limits what a group of processes may consume. A control group can cap memory, processor time, and the number of processes, and the kernel enforces the cap by reclaiming memory, by throttling, or by refusing to create more processes. A namespace limits what a process can see, and a control group limits what it can use, and the two are independent. The third feature is the root filesystem. A container starts with a directory tree of its own, assembled from the layers of an image, as its view of the files. A container whose tree contains only one program and the files that program needs has nothing else to run, to read, or to be tricked into running.
+
+\section{A Static Binary}
+
+The last point suggests how little a Go service needs. A Go program compiled with the \gocode{CGO\_ENABLED=0} setting contains its own runtime and its own implementation of the system calls it uses, and links to no shared library. The \texttt{file} command reports it as statically linked, and such a program runs in a directory tree that has no C library, no shell, and no certificate store. The setting has a cost for programs that depend on the C library's behaviour, such as name resolution through the system's configured services, where the pure-Go implementation takes over, and for a service that does none of these things it costs nothing. The flags \gocode{-trimpath} and \gocode{-ldflags='-s -w'} remove the build directory's path and the symbol tables from the binary, which makes it smaller and its contents less dependent on where it was built.
+
+\lstinputlisting[style=shellstyle,caption={The image definition.},label={lst:dockerfile}]{../golab/deploy/Dockerfile}
+
+The definition in Listing~\ref{lst:dockerfile} starts from \texttt{scratch}, which is an empty filesystem, copies in the binary, and adds an empty directory for data owned by a numeric user. The user is numeric because the image has no file of user names to look a name up in. The entry point runs the program with the ledger placed in the data directory, and the default command starts the service listening on all interfaces, since an address on loopback inside a container would be reachable only from inside it. The binary is built outside the image and copied in, by the script \texttt{deploy/build.sh}, which sets the build flags and then builds the image. A multi-stage definition that compiles inside a Go image is a common alternative and produces the same contents.
+
+\section{Running It}
+
+\lstinputlisting[style=shellstyle,caption={Building and running the service in a container.},label={lst:session9}]{session9.txt}
+
+The transcript in Listing~\ref{lst:session9} follows the image from build to stop. The binary is a statically linked executable of about six megabytes, and the image built from it is under nine. The container is started with the root filesystem read-only, a memory limit of 64 megabytes, half a processor, all Linux capabilities dropped, a limit of 64 processes, and a named volume at the data directory. Each of those restricts the service further and none is needed for it to work. The service starts, logs the address it listens on, and answers an authenticated request to admit a record. The process listing from the host shows the program running as the numeric user, with a process number that belongs to the host's namespace and not the number 1 it has inside. Reading the control group's file for the memory limit on the host shows 67108864 bytes, the 64 megabytes that were asked for. That file's location is specific to the older version of control groups that this host runs, and a host on the newer version keeps the limit in a differently named file under a different path.
+
+Stopping the container sends the terminate signal to the program, and the transcript shows the result of the handler described in the previous chapter: the stop takes a quarter of a second, the exit code recorded by the container runtime is zero, and the log ends with the messages \texttt{shutting down} and \texttt{stopped}. Had the program ignored the signal, the stop would have waited out the runtime's grace period, ten seconds by default, and ended the process with the kill signal. The last command starts a second container from the same image against the same volume, runs the audit, and reads the same ledger with one record in it. The volume is what carries the data past the life of the container, and the container itself was already stopped when the audit ran.
+
+\section{What a Container Does Not Decide}
+
+A container packages a program and limits what it can see and consume. It does not decide what the program is permitted to do, and the separation matters more here than anywhere else in the book, because a container looks like a security decision and is only a deployment one. The token in the environment of the service in the transcript is what lets a caller write, and the container neither knows nor checks it. The limits on memory and processes bound the damage a defect or an abusive caller can do to the host, and they do not make a request legitimate. The restrictions on capabilities and on the root filesystem reduce what an attacker who compromises the program could do next, and they do not prevent the compromise. All containers on a host share its kernel, so a flaw in the kernel is a flaw in every container's isolation, which is the difference from a virtual machine that the first section began with.
+
+The container also leaves the single-writer limit of Chapter~\ref{ch:writer} exactly where it was. The service is the sole owner of the ledger within its process, and it is the sole owner of the file only if nothing else appends to it. Two containers started from the image against the same volume would each have a writer on the same file, and they would fork the chain just as twenty command-line processes did. The audit container of the transcript only reads, and reads were the one thing a second process could do safely, up to the caveat in Chapter~\ref{ch:http} that it might see a line mid-write. A deployment of this service is therefore a single instance, and scaling it by running more copies is not available without the file lock of the exercise in Chapter~\ref{ch:writer} or a different arrangement for the ledger altogether.
+
+\section{Where Part V Ends}
+
+The tool is now a service with a defined interface, a routing table that is a function of the request line, a permission rule that is a function of the caller and the route, an admission step that is the pipeline of Part~II, a ledger owned by one goroutine, and a container that runs it with limits. Each layer has been given a statement of what it guarantees and what it does not, and Appendix~\ref{app:guarantees} collects them. Part~VI turns from building the tool to measuring it. It asks how fast the ledger and the pool are, what the service is doing while it runs, how the tool behaves when its disk or its network fails, and whether a compressed summary of a ledger can still support the decisions the full ledger could.
+
+\section*{Exercises}
+
+\begin{exercise}
+Run the service in a container that has no handler for the terminate signal, by removing the \gocode{signal.NotifyContext} call, and time the stop. Report the time and the exit code, and explain both in terms of the first process of a namespace.
+\end{exercise}
+
+\begin{exercise}
+Start the container with the root filesystem writable and the data directory not mounted as a volume. Add a record, stop and remove the container, start another, and report what the ledger contains. State what this shows about where state belongs.
+\end{exercise}
+
+\begin{exercise}
+Run two containers against the same volume, each posting to its own service, and report what the audit says afterward. Then propose an arrangement, short of a file lock, in which only one of them ever writes.
+\end{exercise}
+
+\begin{exercise}
+Write a multi-stage image definition that compiles the program inside a Go build image and copies the result into the empty image. Compare the final image with the one built here, and say what the extra stage adds to the time of a build.
+\end{exercise}

@@ -1,0 +1,62 @@
+\chapter{Inscription and Validation}
+\label{ch:inscription}
+
+\section{Three Questions That Are Easy to Merge}
+
+Chapter~\ref{ch:transition} observed that a single function can answer, without saying so, three different questions about a proposed change: whether it is well formed, whether the actor is entitled to request it, and whether it is made durable. The distinction is easy to lose because a small program answers all three in one place and nothing breaks. It matters as soon as a system must explain itself, because the three questions have different answers to the question of who is responsible. A record can be perfectly well formed and still not be permitted. A record can be permitted and not yet stored. A record can be stored, receipted, and preserved forever, and still never be treated as true.
+
+The pipeline of this part separates the questions into stages and gives each stage a type. A record is first \emph{inscribed}, which means stored and receipted, and which involves no judgment of any kind. The set of inscriptions is then \emph{validated}, which checks the structure of the whole set without reference to anyone's rules. The valid set is then \emph{admitted} under a policy, which assigns each record a disposition. The admitted records are \emph{projected} onto a surface, meaning that the records belonging to a given scope are selected, and the projection is \emph{activated}, which makes it live provided that it is internally coherent. The five stages follow the staging described in the author's specification of a public claim graph. The code of this chapter and the next is a teaching model of that staging and does not implement the specification: it has no signatures, no argument semantics, and no claim to the formal properties that the specification proves. Where the text speaks of a property, it means the property of this small program, checked by this program's tests.
+
+\golisting{internal/pipeline/record.go}{Records, receipts, and inscription.}{lst:record}
+
+\section{Inscription}
+
+The pipeline of Part~II is a separate chain of types from the artifact types of Part~I. \gocode{Inscribe} takes a \gocode{Record}, which is a claim with an author and a body, and not a file; it returns an \gocode{Inscribed}, which is not a \gocode{Verified}; and it does not write to the ledger. The two chains meet only in the command, which records the outcome of an \gocode{admit} run as a ledger event. A \gocode{Record} carries an identifier, an author, a scope, a body, and a list of identifiers of records it refers to. The function \gocode{Inscribe} encodes the record as JSON, hashes the encoding with SHA-256, and returns an \gocode{Inscribed} value holding the record and the resulting receipt. The signature is the whole of its specification: it takes a record and returns an inscription, it has no error result, and it has no policy parameter. A record with no author, no body, and no identifier is inscribed as readily as a perfect one. This is an intended property and not an oversight, and it expresses the principle that storing is not endorsing. An archive that refused to store a document it disapproved of would no longer be an archive, and a ledger that silently dropped malformed records would conceal exactly the events an auditor most wants to see.
+
+The receipt is deterministic, since the encoding of a struct follows the order of its fields and the encoding of a string slice follows the order of its elements, and so the same record always yields the same receipt, on any machine. The function \gocode{copyRecord} makes a fresh copy of the \gocode{Refs} slice before the record is stored. The copy answers a hazard that is specific to Go's slices. A slice is a small value that refers to an underlying array, so assigning a slice, or placing it in a struct, shares the array and does not duplicate it. Had \gocode{Inscribe} stored the record as given, a caller who later modified the slice it passed in would change the contents of an inscription after its receipt had been issued, and the receipt would no longer describe the record it was supposed to attest. The test \gocode{TestInscribeCopiesRefs} fixes the behaviour. The accessor \gocode{Record} copies on the way out for the same reason.
+
+\section{Validation}
+
+Validation examines a set of inscriptions as a whole and asks whether it is structurally sound. A sound set has three properties: every record has a non-empty identifier, no identifier is attached to two different contents, and the references among the records form a graph with no dangling references and no cycles. The listing below shows the validation function together with the later stages, which the next chapter takes up.
+
+\golisting{internal/pipeline/stages.go}{Validation, admission, projection, and activation.}{lst:stages}
+
+The function \gocode{Validate} builds a map from identifiers to inscriptions and checks the first two properties as it goes. Inscribing the same record twice is treated as idempotent, since the receipts agree, and so a set can be assembled from overlapping sources without being rejected for containing a repeat. An identifier is therefore allowed to appear more than once, provided that every appearance has identical content. Two different records under one identifier are an inconsistency. The check for dangling references runs next and the check for cycles last, using a depth-first search in which each identifier is white while unvisited, grey while its references are being explored, and black once all of them are done. Meeting a grey identifier during the search means that a reference leads back to a record whose own references are still being followed, which is a cycle. The three-colour scheme is the standard method, and it runs in time proportional to the number of records and references.
+
+A detail of the implementation deserves comment because it affects reproducibility. The iteration order of a Go map is deliberately randomized by the runtime, so a loop over the map would visit the records in a different order on each run, and a validation that reported the first error it found would report a different one from run to run. The function therefore collects the identifiers, sorts them, and iterates over the sorted slice, so the error returned for an invalid set is the same every time and the valid set is stored in identifier order. A reader who has written shell scripts that loop over a glob will recognize the concern, since there too the output order is a property that must be established and cannot be assumed.
+
+\section{Validity Does Not Mention Policy}
+
+The central claim of this chapter is that validation, and inscription before it, are independent of any policy. The claim is expressed in the signatures: \gocode{Inscribe} takes a record and \gocode{Validate} takes a slice of inscriptions, and neither takes a \gocode{Policy}. The compiler therefore guarantees that no policy can be passed to them, and a function that cannot receive a policy cannot vary its behaviour according to one.
+
+\begin{proposition}\label{prop:independence}
+For every finite set of records $R$ and every pair of policies $p$ and $q$, the receipts produced by inscribing $R$ and the result of validating the inscriptions are the same whether the set is subsequently admitted under $p$ or under $q$.
+\end{proposition}
+
+\begin{proof}
+Inscription and validation are functions of the records alone. Admission is applied to the output of validation and is not an input to it, and no stage feeds a policy's result back to an earlier stage. Hence the receipts and the validity of $R$ are determined before either policy is consulted.
+\end{proof}
+
+The proof is short because the design makes it short, and the honesty of the claim depends on a qualification that the language forces. Go does not enforce purity. A function that takes no policy parameter could still read a package-level variable that holds a policy, or the clock, or a file, and the signature would not reveal it. The compiler's guarantee is the narrow one that no policy is passed in, and the broader statement that nothing else influences the result rests on the code of the two functions, which can be read in a minute, and on the test \gocode{TestPolicyDoesNotAffectInscriptionOrValidity}. The test builds the same records, runs them through admission under three quite different policies, and checks that the receipts and the size of the valid set are identical each time. It checks instances of the proposition and does not prove it. The distinction between an argument that covers all cases and a test that covers some is one the book keeps in view throughout.
+
+\section{The Zero Value, Again}
+
+The type \gocode{Valid} follows the pattern of \gocode{Verified} in having unexported fields, so that only \gocode{Validate} can build a non-empty one. Its zero value, however, differs in an instructive way. The zero \gocode{Verified} claimed to have read a file and had not, so it was dangerous and needed an \gocode{IsZero} guard. The zero \gocode{Valid} is an empty set of records, and an empty set satisfies every structural property vacuously, so it is a legitimate valid set and passing it on is harmless. A type whose zero value is meaningful and safe needs no guard, and designing types so that the zero value is a sensible state is an old Go proverb that this contrast makes concrete.
+
+\section*{Exercises}
+
+\begin{exercise}
+Change \gocode{Validate} so that a reference to an unknown record is allowed and treated as a pending reference. Identify which later stage must then change, and what the proposition on policy independence still guarantees.
+\end{exercise}
+
+\begin{exercise}
+Remove the sort from \gocode{Validate} and run the tests repeatedly with the \gocode{-count} flag. Report which tests become unreliable and explain why in terms of map iteration.
+\end{exercise}
+
+\begin{exercise}
+The receipt covers the record but not the time at which it was inscribed. Add an inscription time without breaking the determinism of receipts, and decide whether the time should be part of the receipt.
+\end{exercise}
+
+\begin{exercise}
+Write a function that, given a valid set, returns the records in an order such that every record follows the records it refers to. Explain why such an order exists exactly because the set is acyclic.
+\end{exercise}

@@ -1,0 +1,74 @@
+\chapter{A Ledger of Actions}
+\label{ch:ledger}
+
+\section{What a Ledger Is For}
+
+A tool that finds files, hashes them, and runs programs on them produces consequences, and an operator who returns to the tool after a week will want to know what it did. Terminal output is gone by then, and the state of the filesystem records only the net effect of the actions and not the sequence. A log file is the usual remedy, but an ordinary log has a weakness that matters in a setting where the point of keeping records is to rely on them later: any line can be changed or removed, and nothing in the file reveals that the change took place. The ledger of \golab{} is an append-only sequence of records in which each record includes the digest of the record before it, so that a change to an earlier line breaks the chain and can be found by recomputation.
+
+The ledger records events and does not judge them, and it is worth being exact about what that sentence covers. In Part~I the ledger receives one record for each \gocode{verify} and each \gocode{run} command, and nothing for \gocode{discover}, which is read-only. A \gocode{verify} record holds counts and not per-file results. No record names the person or process that issued the command, since the tool has no notion of identity. The ledger also does not accept every write unconditionally: \gocode{Append} refuses to extend a chain that already fails the check, which is a refusal made by the ledger itself and is deliberate. It states that a verification was performed, that a program was run and ended in a certain way, and that these happened in this order, and it takes no position on whether they were permitted. That separation between recording and authorizing is one of the central distinctions of the book, and in Part~I it is observed by construction, since the program has no policy beyond a few classification rules and the admissibility checks of the transition package. Part~II introduces policy as a separate component and then raises the question of what a ledger of events should say about refusals.
+
+\section{The Record and Its Digest}
+
+A record has a sequence number, a timestamp, an action, a subject, a map of details, the digest of its predecessor, and its own digest. The structure is declared with field tags that control its encoding as JSON, and each record occupies one line of a file, a format commonly called JSON Lines, which has the convenient property that appending a record never requires rewriting what is already there.
+
+\golisting{internal/ledger/ledger.go}{The ledger package.}{lst:ledger}
+
+Let the records be $r_1, r_2, \ldots, r_N$ and let $\operatorname{enc}$ denote the JSON encoding of a record with its digest field set to the empty string. The digest of record $n$ is defined by
+\[
+d_n = H\bigl(\operatorname{enc}(r_n)\bigr), \qquad d_0 = \varepsilon,
+\]
+where $H$ is SHA-256 and $\varepsilon$ the empty string, and the field of $r_n$ that records its predecessor holds $d_{n-1}$. Because $d_{n-1}$ is part of the encoded content of $r_n$, the value $d_n$ depends on every earlier record, through the chain of predecessors. The function \gocode{digest} in Listing~\ref{lst:ledger} computes the definition directly. It relies on a property of the JSON encoder that the documentation guarantees, namely that the keys of a map are written in sorted order and that the fields of a struct are written in the order of their declaration, so that the same record always encodes to the same bytes. Without that determinism the digest would not be reproducible, and a ledger written on one machine could not be checked on another.
+
+A change to a record is reported at that record's own sequence number, because its recomputed digest no longer agrees with the stored one, and the linkage test at the next record is reached only if the digest was rewritten. The function \gocode{Check} verifies three things for each record in turn: that its sequence number equals its position, that its predecessor field equals the digest of the preceding record, and that its own digest equals the recomputed value. It reports the first failure, wrapped around the sentinel \gocode{ErrBroken}, and the wrapping carries the sequence number so that an operator is told where to look. The function \gocode{Append} loads the existing ledger, checks it, and refuses to extend one that fails the check, because appending to a broken chain would give the damage a respectable appearance. The new record is written with the file opened in append mode, and the error of the final \gocode{Close} is examined, since a failure to flush a write is reported there and not at the call to \gocode{Write}. The listing is the final form of the package, which Part~VI revised in two ways that this chapter does not discuss: a write that fails part-way is cut back so that no fragment of a record remains, and the record is flushed to stable storage before the function returns. Chapter~\ref{ch:faults} gives the reasons.
+
+\section{What the Chain Establishes}
+
+The guarantee that the chain gives is narrower than it can appear, and it is worth stating exactly.
+
+\begin{proposition}\label{prop:chain}
+Suppose a ledger of $N$ records satisfies \gocode{Check}, and suppose $H$ is collision resistant. If a single record $r_k$ with $k < N$ is replaced by a different record while all others are unchanged, then \gocode{Check} fails. If a trusted party holds the head digest $d_N$, then any ledger that satisfies \gocode{Check} and has head digest $d_N$ has the same records as the original, in the same order.
+\end{proposition}
+
+\begin{proof}
+Let $r_k'$ be the replacement for $r_k$ with $k<N$. If $r_k'$ keeps the old digest field, then the digest recomputed from its content differs from the stored one unless the two records encode identically, which contradicts their being different. If $r_k'$ stores a digest recomputed from its own content, that digest differs from $d_k$ by collision resistance, and record $r_{k+1}$ still stores $d_k$ as its predecessor, so the linkage test fails at $k+1$. For the second claim, a ledger that satisfies \gocode{Check} is determined by its records, and each digest is a function of everything before it, so two such ledgers with the same $d_N$ must agree record by record, or else a collision exists.
+\end{proof}
+
+The proposition has two limits that follow from its own statement. The first is that the check alone does not protect the final record or the length of the ledger. A person who can rewrite the file can alter the last record and recompute its digest, or can delete trailing records, and the shortened file will still satisfy \gocode{Check}. The second is that the check establishes internal consistency and nothing about authenticity: an adversary who controls the whole file can produce a different ledger with perfectly consistent digests from beginning to end. The protection against both is the one the proposition names, which is a copy of the head digest held somewhere the adversary cannot reach, such as a printed note, a message sent to another party, or a record in a different system. The ledger is therefore best described as tamper-evident relative to an external anchor. It is not tamper-proof, and the version in Part~I does not provide the anchor. The tool does not yet have a command that prints the head digest, and the first exercise adds one. Where the digest is stored is the operator's decision, and the examples above are illustrations and not features of \golab{}.
+
+Two further limits belong to the implementation. Timestamps come from the clock of the machine, are truncated to whole seconds, and are not authenticated, so the ledger shows the order in which events were recorded and not trustworthy times. The subject of a run record is the program and its arguments joined with spaces, which loses the original quoting, as the transcript below shows, and is therefore a description for a human reader and not a command that can be re-executed.
+
+\golisting{internal/ledger/ledger_test.go}{Tests for the ledger chain.}{lst:ledger-test}
+
+The tests of Listing~\ref{lst:ledger-test} check the three behaviours that matter. The first appends three records and confirms that the chain holds when reloaded. The second corrupts the file by changing one character of the first record and confirms that \gocode{Check} reports \gocode{ErrBroken} and that \gocode{Append} refuses to extend the damaged ledger. The third confirms that a missing file is read as an empty ledger, which is the state in which the first append creates the file.
+
+\section{The Command and a Recorded Session}
+
+The command-line program connects the pieces. Its \gocode{main} function does nothing except pass the arguments to a function named \gocode{run} and exit with the status that \gocode{run} returns, so that the decision about the process exit status is made in one place and the rest of the program is testable. The complete source is in Appendix~\ref{app:main}. Each subcommand follows the same shape, in which it performs an operation, appends a record of the outcome to the ledger, and only then returns an error if the operation failed, which is the ordering argued for in Chapter~\ref{ch:errors}.
+
+The following transcript is the output of an actual session. The directory \texttt{papers} contains a text file, a \TeX{} file, and a summary of the second. The session discovers the files, verifies them, runs two programs of which one fails, audits the ledger, and then alters the first line of the ledger and audits again.
+
+\lstinputlisting[style=shellstyle,caption={A recorded session of \golab{}.},label={lst:session}]{session.txt}
+
+Several features of the transcript carry the argument of the chapter. The kinds in the first listing show the classification at work, with the summary distinguished from the sources. The digest of \texttt{a.txt} is the standard value for the three bytes \texttt{abc}. The failed program is recorded in the ledger with its outcome and exit status, and the command exits with status 1 so that a surrounding shell script can detect the failure. The audit reports that the chain holds until the first line is altered by changing a single letter, after which the audit fails and, more significantly, the next attempt to run a program is refused until the ledger is repaired. A tool that continued to extend a ledger it knew to be damaged would be undermining the one property that gives the ledger its use.
+
+\section{Where Part I Ends}
+
+The tool at this point can find files, state what it has read of them, run programs on them, and keep a chained record of what it did, and each of these capacities has a type or a package that names it. The four responsibilities of Chapter~\ref{ch:transition} have homes: the command in \gocode{cmd/golab}, the operations in \gocode{artifact} and \gocode{runner}, the record in \gocode{ledger}, and a rudimentary policy in the classification rules and the transition checks. What the tool lacks is also clear. It has no explicit policy that decides whether an operation is permitted, and the ledger cannot say that something was refused for reasons of policy. It cannot safely run two operations at once, since two processes that append at the same moment can each read the same predecessor and write records with the same sequence number, a fault that \gocode{Check} would detect afterward and that nothing prevents. It does not anchor the head of its ledger anywhere outside the file. These absences are the agenda of the later parts of the book, and the plan for them follows this chapter.
+
+\section*{Exercises}
+
+\begin{exercise}
+Add a command \gocode{head} that prints the sequence number and digest of the last record, and write a test. Then describe a procedure by which an operator could use the output to detect the deletion of trailing records, and state what the procedure assumes about where the output is kept.
+\end{exercise}
+
+\begin{exercise}
+Run two \gocode{golab run} commands at the same instant in a loop until the ledger is damaged, and report how the damage appears to \gocode{Check}. Propose a locking strategy based on a lock file, and identify a failure of that strategy.
+\end{exercise}
+
+\begin{exercise}
+Extend the record so that a verification event includes the digests of the files it verified, and consider the size of the resulting record for a directory of ten thousand files. Discuss whether the digests belong in the ledger or in a separate manifest whose own digest is recorded in the ledger.
+\end{exercise}
+
+\begin{exercise}
+Design, without implementing it, a record for a refusal, that is, for a command that was rejected before any operation was attempted. State which fields it needs, what the subject should be, and why the ledger of Part~I has no honest way to produce it.
+\end{exercise}

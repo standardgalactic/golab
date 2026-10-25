@@ -1,0 +1,57 @@
+\chapter{Values, Types, and Records}
+\label{ch:types}
+
+\section{Structs, Copies, and Zero Values}
+
+A Go program describes its data with types, and the most important composite type for the purposes of this book is the struct, a fixed collection of named fields. The counter of the previous chapter used a struct with a single field, which may have seemed a needless ceremony, but the habit of wrapping state in a named type pays off as soon as the state grows. The artifact package of \golab{} begins with a struct that describes a file that has been found. The struct records three things only, the path, a classification, and the size in bytes at the moment of the walk. It does not record a modification time, an owner, or any property of the content.
+
+\golisting{internal/artifact/types.go}{The types of the artifact package.}{lst:artifact-types}
+
+Three properties of structs govern almost every design decision in the chapters that follow. First, structs are values: assigning one to another variable, passing it to a function, or returning it from a function copies its fields, so the receiver holds an independent value. Second, every type has a zero value that is available without any explicit construction, and for a struct the zero value is the struct whose every field has its own zero value, which is the empty string for a string, zero for a number, and \gocode{nil} for a pointer, slice, or map. Third, a composite literal such as \gocode{Discovered\{Path: p, Kind: k, Size: n\}} names the fields it sets and leaves the rest at their zero values, so that adding a field to a struct does not break existing literals that name their fields.
+
+The zero value is a convenience in many programs and a hazard in programs that wish to say that a value has not been established. A \gocode{Discovered} with an empty path is not a meaningful description of any file, but the language will construct one whenever asked, and it is the responsibility of the surrounding code to refuse to treat it as a discovery. This tension between what the type system can express and what the design requires is one of the main themes of Part~I, and Section~\ref{sec:two-states} returns to it.
+
+\section{Named Types as Vocabularies}
+
+The type \gocode{Kind} is defined as a string with a name of its own, and four constants give it its intended vocabulary: source, output, summary, and other. Naming the type has two benefits. A function that takes a \gocode{Kind} says in its signature what sort of string it expects, and the compiler refuses to pass a plain \gocode{string} variable where a \gocode{Kind} is wanted without an explicit conversion, which catches a class of mistakes in which one kind of text is confused with another.
+
+The benefit has a limit that the book states plainly, because the limit matters to the design. Go has no enumeration type that closes a vocabulary. A \gocode{Kind} is a string underneath, the expression \gocode{Kind("anything")} is a legal conversion, and the compiler will not object to a value outside the four declared constants. The closure of the vocabulary is therefore a convention, maintained by declaring the constants in one place, by routing classification through one function, and by having any consumer that switches on the kind treat an unrecognized value as an error and not as a default. The convention is cheap and effective in a small program, and it is worth being clear that it is a convention. A guarantee would require either a type whose representation cannot be forged from outside its package, which is the technique used for \gocode{Verified} below, or a runtime check at each boundary.
+
+The vocabulary contains a deliberate distinction between a source and a summary. A file ending in \gocode{.summary.md} is classified as a summary, and a file ending in \gocode{.tex} as a source. The classification is made from the name alone and is therefore weak evidence, as Chapter~\ref{ch:traversal} discusses, but the existence of the distinction in the type is what allows later operations to decline to treat a generated summary as if it were the document it summarizes. A summary is an interpretation of evidence and not itself evidence, and a system that can say so in its vocabulary can enforce it in its policies.
+
+\section{Methods and the Package Boundary}
+
+A method is a function with a receiver, written between the keyword \gocode{func} and the method name. The methods on \gocode{Verified} in Listing~\ref{lst:artifact-types} are accessors, and they exist because of the way Go controls visibility. A name that begins with an upper-case letter is exported and may be used by other packages, while a name that begins with a lower-case letter is private to its own package. The fields of \gocode{Verified} are named \gocode{found} and \gocode{sum}, in lower case, so no code outside the artifact package can set them or read them directly. Code elsewhere can obtain a \gocode{Verified} only from the function \gocode{Verify}, which lives in the same package, or as the zero value, and can inspect it only through the accessor methods.
+
+This is a genuine guarantee, and it differs in kind from the conventions discussed above. The Go compiler enforces the visibility rule, so a package that imports \gocode{artifact} cannot write \gocode{artifact.Verified\{sum: "abc"\}} and have it compile. The guarantee is limited in two ways that should be understood exactly. It does not prevent the zero value, which any code may obtain by declaring \gocode{var v artifact.Verified}, and which is why the type carries an \gocode{IsZero} method and why the documentation says that a zero value carries no evidence. The method is specific to \gocode{Verified}, the one type in the module whose zero value would be mistaken for a successful act. The other types do not need it, because their zero values are either harmless, as Chapter~\ref{ch:inscription} shows for \gocode{Valid}, or are already rejected by an existing check. It also says nothing about whether \gocode{Verify} itself is correct, since the type records only that a digest was produced by that function and cannot check that the digest corresponds to the bytes on disk at the moment of use. A file can change after it was verified. What the type can claim is that someone, through the one sanctioned route, read the bytes once and recorded what they hashed to.
+
+\section{Packages, Modules, and the Internal Directory}
+
+The \golab{} module is organized so that each concern lives in a package of its own. The command-line entry point is in \gocode{cmd/golab}, and the reusable machinery lives under \gocode{internal}. The directory name \gocode{internal} has a meaning that the \gocode{go} tool itself enforces: a package under \gocode{internal} can be imported only by code rooted at the parent of that directory. In this module, therefore, \gocode{golab/internal/artifact} can be imported by the command and by other packages of \golab{} but not by any outside module, and the author of the tool is free to change those packages without breaking users who never had access to them. As with the visibility of fields, this is a mechanical guarantee supplied by the toolchain and not a convention.
+
+Dividing the code this way supports the separation of roles introduced in Chapter~\ref{ch:transition}. The package that finds and hashes files knows nothing of the command line, and the package that writes the ledger knows nothing of files. A package that does not import another cannot depend on it, and the Go compiler rejects import cycles, so the dependency structure of the program is a directed acyclic graph that the toolchain checks on every build. The graph for Part~I is simple: the command imports three packages, and none of the three imports another.
+
+\section{Two Types for Two States of Knowledge}
+\label{sec:two-states}
+
+The pair \gocode{Discovered} and \gocode{Verified} encodes a distinction that the shell cannot state. A path returned by \gocode{find} is a claim about the existence of a directory entry at one moment and carries no commitment about what the entry contains. A digest of the bytes of a file, computed by reading them, is a claim of a different strength: it supports the later assertion that a file with that digest has exactly those contents, to within the collision resistance of the hash function. By giving the two states different types, the design makes it possible for a function to declare which it needs. An operation that merely lists files can take a \gocode{Discovered}, and an operation that is going to treat the content of a file as established, by recording it in a ledger or comparing it with an earlier digest, can require a \gocode{Verified}, so that a call that skips the reading step does not compile.
+
+The design should not be oversold. It does not make the program correct, and it does not stop a careless author from verifying a file and then ignoring the digest. What it does is move one class of mistake, using an unverified file where a verified one is required, from the category of runtime surprises to the category of compile-time errors, and it records in the program text a commitment about what each stage has and has not established. The same technique recurs throughout the book, and in Part~II it is applied to records and to the stages of the ledger pipeline.
+
+\section*{Exercises}
+
+\begin{exercise}
+Add a method \gocode{Valid} to the type \gocode{Kind} that reports whether a value is one of the four declared constants. Decide where in \golab{} the method should be called, and write a test that fails if a new constant is added to the vocabulary without being added to \gocode{Valid}.
+\end{exercise}
+
+\begin{exercise}
+The zero value of \gocode{Verified} carries no evidence. Write a function that accepts a \gocode{Verified} and returns an error when given the zero value, and explain whether this check belongs in the function, in its callers, or in the type. Consider the cost of forgetting the check in each placement.
+\end{exercise}
+
+\begin{exercise}
+Replace the exported fields of \gocode{Discovered} with unexported fields and accessors, and observe which parts of the program must change. Argue for or against this change, taking into account that a \gocode{Discovered} makes no claim about the content of the file.
+\end{exercise}
+
+\begin{exercise}
+Draw the import graph of the \golab{} module as it stands at the end of Part~I. Explain why the Go compiler's refusal of import cycles constrains the placement of the type that represents a ledger record relative to the code that constructs it.
+\end{exercise}

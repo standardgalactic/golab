@@ -1,0 +1,60 @@
+\chapter{Admission, Projection, and Refusal}
+\label{ch:admission}
+
+\section{Admission}
+
+Admission is the first stage at which a policy is consulted, and it is where a valid set of records receives its dispositions. The function \gocode{Admit}, in Listing~\ref{lst:stages}, visits the records in identifier order and assigns each one of seven dispositions. Two of them are determined by the pipeline itself. A record with no author or no body is malformed, and a record whose author, scope, and body repeat those of an earlier record in identifier order is a duplicate. Only a record that is neither is shown to the policy, and the policy's verdict is converted to one of the remaining five dispositions: admitted, unscoped, gated, quarantined, or refused.
+
+The ordering of these tests encodes a decision. Malformed records are never shown to a policy, so a policy is never asked to reason about a record that lacks the fields it would inspect, and a policy written without defensive checks cannot be made to fail by a record with an empty body. A duplicate is likewise detected before the policy runs, so the policy is not asked to judge the same content twice. The consequence to be aware of is that duplicate detection depends on the order of identifiers, since the earlier record in that order is the original and the later is the repeat. Two records with identical content but different identifiers are therefore treated asymmetrically, and an author who wishes a particular one to count as the original must choose identifiers accordingly. The behaviour is deterministic and documented, and it is a convention of this model and not a law.
+
+A record that the policy refuses still registers as seen, so that a later identical record is reported as a duplicate of a refused record. This is a small instance of a general question for any system that keeps state about what it has judged: whether the memory of a judgment should include the judgments that went against the subject. The choice here is the simpler one, and the first exercise asks for the alternative.
+
+\section{Seven Dispositions, Five Verdicts}
+
+The split between a seven-valued disposition and a five-valued verdict deserves a second look, because it is an example of using types to divide authority. The pipeline holds authority over what is structurally wrong or redundant, and the policy holds authority over what is permitted, and each is confined to its own vocabulary. A policy author cannot declare a record malformed in order to hide it, since the type of the policy's result has no such value, and the pipeline's author cannot make a record refused for policy reasons without a policy being consulted. The separation does not decide who deserves to hold either authority. It makes the boundary visible in the types, so that anyone who wishes to move it has to change a declaration that is seen in review and cannot do so by an incidental edit to a function body.
+
+\section{Projection and Activation}
+
+A projection selects the admitted records visible on one surface, where a surface is identified by a scope prefix. The function \gocode{Project} takes only records whose disposition is admitted and whose scope begins with the given prefix, and it copies them so that the projection owns its data. Activation then makes the projection live, subject to one check that cannot be done earlier. A projected record may refer to a record that the projection left out, either because that record belongs to another scope or because it was not admitted, and an active record whose foundations are invisible on its own surface is an orphan. The function \gocode{Activate} returns \gocode{ErrOrphaned} if any projected record has such a reference. The check is a single pass over the direct references of the projected records and is not recursive, because if every direct reference of every projected record lies inside the projection, then so does every indirect one.
+
+The need for the check shows why the stages are distinct. Validation found every reference intact, since the full set was closed and acyclic. Admission may then have refused or gated some of the referred-to records, and projection may have separated the rest by scope, and the coherence of the set was destroyed by operations that were each individually reasonable. No earlier stage could have detected this, because the damage did not exist until later stages acted. A system that validated once at the start and never again would present orphans as though they were sound.
+
+\golisting{internal/pipeline/pipeline_test.go}{Tests for the pipeline.}{lst:pipeline-test}
+
+\section{What the Tests Check}
+
+The tests in Listing~\ref{lst:pipeline-test} are organized around the claims of the last three chapters. The table in \gocode{TestValidate} covers the success case and each failure the validator can report, including the repeat that is accepted as idempotent and both the self-cycle and the two-record cycle. The test \gocode{TestAdmitDispositions} builds a set of six records, chosen so that five of the seven dispositions are exercised (the unscoped disposition appears in the session below, and the quarantine only in the combinator tests), and compares the result with the expected dispositions in full. The record refused for its author and also outside the required scope is expected to be refused, which checks that the more severe verdict prevails. The tests \gocode{TestAllOfIsOrderIndependent} and \gocode{TestAddingAPolicyNeverAdmitsMore} check parts (a) and (b) of Proposition~\ref{prop:allof} on instances, and \gocode{TestUnknownVerdictFailsClosed} checks both the direct and the combined path for verdicts outside the declared range. Finally \gocode{TestActivateDetectsOrphans} builds the situation described above, in which one record in one scope refers to a record in another, and confirms that activation fails for the narrow scope and succeeds for the wide one.
+
+Tests of this kind are evidence of a specific character. Each one confirms that for the particular records and policies it constructs the program behaves as the proposition says it must. None of them shows that the proposition holds for all records and all policies, and the reader should not read the passing suite as a proof. The propositions of the chapters are proved in the text, and the tests guard against the code departing from the text. The first draft of \gocode{AllOf} passed every test that existed when it was written and was nevertheless inconsistent with the proposition, and it was the attempt to prove the proposition and not any test that revealed the gap. The experience is a fair summary of the relation between the two activities.
+
+\section{Recording Refusals}
+
+Part~I ended with a limitation: the ledger could record that an operation was performed and had no honest way to record that one was refused. The \gocode{admit} subcommand closes the gap in the following way. It reads a file of records, inscribes and validates them, builds a policy from its flags, admits the records, prints one line per record with its disposition and the first twelve characters of its receipt, and appends a single ledger record whose details are the number of records and the number that received each disposition. A validation failure is recorded too, under a distinct action name, with the stage and the error, so that an attempt to admit an inconsistent set leaves a trace. If activation fails the failure is placed in the details of the ledger record before the error is returned, in keeping with the ordering argued in Chapter~\ref{ch:errors}.
+
+\lstinputlisting[style=shellstyle,caption={A recorded session of the \gocode{admit} command.},label={lst:session2}]{session2.txt}
+
+In the first command of the transcript the records are judged under three rules at once. The record by the denied author is refused, the one in another scope is unscoped, the repeat is a duplicate, the one without an author is malformed, and the one containing the gated phrase is held for review. Exactly one record is admitted, and it is the only one active in the scope. The second command applies no rules, admits everything that is not malformed or a duplicate, and then projects the second scope, in which the record that remains refers to a record outside it. Activation fails, the command exits with a nonzero status, and the ledger records both runs.
+
+The transcript also shows what the ledger does not yet record. The ledger entry holds counts and not the individual dispositions, so an auditor can see that one record was refused but not which. It holds no description of the policy that was applied, so a run with one set of flags is indistinguishable in the ledger from a run with another that happened to yield the same counts. And the receipts that the command prints are not stored. These omissions are deliberate simplifications for the sake of the chapter and are the subject of the exercises. A ledger that is to support an audit needs to record the policy as well as the outcome, because a disposition is a function of both the record and the rules, and a record of the first without the second cannot be reproduced.
+
+\section{Where Part II Ends}
+
+The tool now distinguishes four things that the shell blurs and that Part~I could only name: a record that has been stored, a record that is structurally sound as part of a set, a record that has been judged under a policy, and a set of records that is coherent on a surface. Each has its own type, each stage has its own function, and the dependence of each on the one before it is visible in the signatures. What the tool lacks is also clear. It runs one stage at a time on one thread, and it does not record the policy it applied. It treats a file of records as the whole world, and it offers no way for several operators to submit records at once. Part~III takes up concurrent execution, beginning with the worker pool that verifies many files at the same time and the single goroutine that will own the ledger.
+
+\section*{Exercises}
+
+\begin{exercise}
+Change \gocode{Admit} so that a refused record does not register as seen, and show an input on which the dispositions differ from those of the present version. Discuss which behaviour is preferable for an audit.
+\end{exercise}
+
+\begin{exercise}
+Extend the ledger record written by \gocode{admit} to include the full list of identifiers and dispositions, and measure the size of the record for ten thousand records. Propose a representation in which the ledger holds only a digest of the full list and the list is kept elsewhere, and state what the operator must do to check the digest.
+\end{exercise}
+
+\begin{exercise}
+Add a description of the policy to the ledger record, produced by a \gocode{Describe} method that each policy implements. Consider whether \gocode{PolicyFunc} can implement it, and what that implies about adapting plain functions to richer interfaces.
+\end{exercise}
+
+\begin{exercise}
+Implement a stage between admission and projection that releases gated records after a named reviewer approves them. Decide which of the existing types should carry the approval, and whether the receipt of a record should change when it is approved.
+\end{exercise}

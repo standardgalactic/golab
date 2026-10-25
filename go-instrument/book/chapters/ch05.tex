@@ -1,0 +1,54 @@
+\chapter{Running Programs Without a Shell}
+\label{ch:processes}
+
+\section{The Argument Vector}
+
+A workflow tool spends much of its life invoking other programs, and the manner of invocation determines how much of the shell's fragility the tool inherits. When a Bash script runs a command, it hands a line of text to an interpreter that splits it into words, expands variables, performs globbing, and interprets quotation, and every one of those steps is an opportunity for a file name containing a space, a quotation mark, or a dollar sign to be read as something other than a name. Go's \gocode{os/exec} package avoids the whole class. The function \gocode{exec.Command} takes the program and each argument as separate strings and passes them to the operating system as the argument vector, with no intervening interpretation. A file called \texttt{my paper (final).tex} is one argument, and it remains one argument however the program is run.
+
+The package \gocode{runner} wraps the facility in a form suited to a tool that must record what happened.
+
+\golisting{internal/runner/runner.go}{Running an external program and classifying the outcome.}{lst:runner}
+
+The function \gocode{Run} starts a program in a given directory, waits for it, and returns a \gocode{Result} that holds the outcome, the exit code, the captured output and error streams, and the elapsed time. Capturing is arranged by assigning \gocode{bytes.Buffer} values to the \gocode{Stdout} and \gocode{Stderr} fields of the command. Because those fields are of type \gocode{io.Writer}, the buffers satisfy them by the same structural rule that allowed a hash to be written to in the previous chapter, and the program is spared the intermediate temporary files that a shell script would use for the same purpose.
+
+\section{Four Endings}
+
+A shell script usually distinguishes two ways in which a command can end, by testing whether its status \gocode{\$?} is zero. A tool that keeps records needs a finer classification, because the operator will ask different questions about different endings. A program that ran and exited with a nonzero status has told us something about its work. A program that was stopped by the tool because it ran too long has told us nothing, and the tool has made a decision on its behalf. A program that could not be started at all, because it does not exist or is not executable, has never run. The type \gocode{Outcome} names the four cases of success, failure, timeout, and failure to start, and the \gocode{switch} in \gocode{Run} sorts every possible ending into exactly one of them.
+
+Go has no sum types, so the four cases are represented as string constants of a named type, with the closure of the set maintained by convention as discussed in Chapter~\ref{ch:types}. The \gocode{switch} makes the order of the tests significant. The timeout is tested before the exit-error case because a process killed by the expiry of the context also yields an error of the exit type, and testing the cause first prevents a killed process from being reported as an ordinary failure with an unusual status.
+
+The function returns a non-nil error only for the fourth ending. This is a design decision with a cost. A caller that tests only \gocode{err} will conclude, wrongly, that a program that ran and failed was a success of the tool, and must also inspect the outcome in the result. The alternative, returning an error for every ending other than success, would have made the signature simpler and the information coarser, and since the ledger needs to record the distinctions, \gocode{Run} reports them in the value and reserves the error for the case in which there is no meaningful value to report. Any such decision should be documented at the function, and the comment above \gocode{Run} states it.
+
+\section{Time and Cancellation}
+
+The timeout is implemented with the \gocode{context} package, which Part~III develops at length. A context is a value that carries a deadline and a signal for cancellation across the boundaries of functions and goroutines. The call \gocode{context.WithTimeout} derives a context that is cancelled when the given duration has elapsed, and \gocode{exec.CommandContext} ties a command to it, so that when the context is done the program is killed. The deferred call to the \gocode{cancel} function releases the resources of the context as soon as \gocode{Run} returns, whether the command finished or not.
+
+The tests for the runner revealed a subtlety that is easy to miss. The timeout test runs the command \texttt{sh -c "sleep 5"} with a limit of a tenth of a second. When the context expires, the kill signal is delivered to the shell, which is the process that was started. The \texttt{sleep} that the shell in turn started is a child of the shell and is not signalled. It still holds the write ends of the pipes through which the output of the shell is being captured, and the standard library's \gocode{Wait} does not return until those pipes are closed. In the first version of the runner, therefore, the test took the full five seconds, because the call was waiting for a process that the tool had already given up on. The remedy is the field \gocode{WaitDelay}, added to \gocode{exec.Cmd} in Go 1.20, which bounds how long \gocode{Wait} will wait for the pipes after the context is done. The runner sets it to half a second, and the test now finishes in a fraction of a second. The episode is a reminder that killing a process is not the same as killing the work it started, and that a tool which supervises programs must decide what happens to descendants. Part~V returns to the question in the setting of containers, where the isolation of process groups and namespaces gives the tool a means of terminating a whole tree.
+
+\golisting{internal/runner/runner_test.go}{Tests for the four endings.}{lst:runner-test}
+
+The tests in Listing~\ref{lst:runner-test} exercise each outcome in turn. They use \texttt{sh} as a convenient stand-in for any program, which ties them to systems that provide a POSIX shell. That dependency is acceptable for a tool developed in a Linux environment, and it is noted here so that it is a decision and not an oversight.
+
+\section{A Shell Pipeline and Its Go Counterpart}
+
+It is instructive to ask what the shell provides that the \gocode{runner} package does not. A pipeline such as \gocode{pdflatex paper.tex | tee build.log} connects the output of one program to the input of another, and the shell arranges the connection. In Go the connection must be made explicitly, either by assigning the \gocode{StdoutPipe} of one command to the \gocode{Stdin} of the next or by passing data through an \gocode{io.Pipe}. The explicitness is a burden for a one-line command and a benefit for a pipeline whose stages must be supervised separately, since each stage then has its own exit status, its own captured error output, and its own timeout, and the failure of one is visible instead of being masked by the status of the last. The shell offers the option \gocode{pipefail} to approximate this, and Go makes it the default shape of the code.
+
+The bounded character of the \gocode{runner} package is deliberate. It runs one program, waits for it, and reports what happened. Chaining, retrying, and running programs in parallel are operations on top of it, and Part~III builds them from goroutines and channels so that the supervision of a single program, once settled, is not reopened.
+
+\section*{Exercises}
+
+\begin{exercise}
+Write a test that runs a program with an argument containing spaces, quotation marks, and a dollar sign, and shows that the program receives it unchanged. Then write the corresponding Bash command and describe what quoting is required to achieve the same result.
+\end{exercise}
+
+\begin{exercise}
+Remove the assignment to \gocode{WaitDelay} and run the timeout test. Measure how long it takes and explain the result in terms of the processes and pipes involved. Then change the test command to \texttt{exec sleep 5} and explain why the behaviour differs.
+\end{exercise}
+
+\begin{exercise}
+Extend \gocode{Result} so that it also reports the signal that terminated a process, where there was one, and add a fifth outcome for a program killed by a signal other than the tool's own. State what information the operator gains from the distinction.
+\end{exercise}
+
+\begin{exercise}
+Implement a function that runs two programs as a pipeline, connecting the output of the first to the input of the second, and returns a separate result for each. Decide how the function should behave when the second program exits before the first has finished writing.
+\end{exercise}

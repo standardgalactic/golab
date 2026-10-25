@@ -1,0 +1,72 @@
+\chapter{What a Summary Discards}
+\label{ch:compression}
+
+\section{The Question}
+
+A ledger grows without bound, and sooner or later someone proposes to replace the old part of it with something smaller. The index of Part~IV is one such replacement, and it is safe because the ledger stays where it is and the index can be thrown away. The proposal that follows naturally is to keep the summary and discard the records, and the question this chapter asks is what that would cost. The question is put as an experiment on records and ledgers and has nothing to do with any machine-learning model. It concerns the plainest form of the principle that has run through the book, that a record of what happened and a judgment about it are different things, and that a summary which keeps the judgments someone expected to need may have dropped the distinctions that a later judgment requires.
+
+\section{Summaries, Decisions, and Availability}
+
+Fix a set of ledgers. A \emph{summary} is a function that maps each ledger to a smaller description of it. A \emph{decision} is a question about a ledger whose answer someone may later need: what was the last digest recorded for a file, did a failure follow a success, how many records are there. A decision is \emph{available} from a summary if its answer can be computed from the summary alone.
+
+\begin{proposition}\label{prop:available}
+Let $S$ be a summary and $D$ a decision on a set $\mathcal{L}$ of ledgers. $D$ is available from $S$ on $\mathcal{L}$, meaning that some function $f$ satisfies $f(S(L)) = D(L)$ for every $L \in \mathcal{L}$, if and only if no two ledgers $L_1, L_2 \in \mathcal{L}$ have $S(L_1) = S(L_2)$ and $D(L_1) \neq D(L_2)$.
+\end{proposition}
+
+\begin{proof}
+If $f$ exists and $S(L_1) = S(L_2)$, then $D(L_1) = f(S(L_1)) = f(S(L_2)) = D(L_2)$. Conversely, if no such pair exists, define $f(s)$ for a summary value $s$ in the image of $S$ to be $D(L)$ for any $L$ with $S(L) = s$. The choice does not matter, since all such ledgers agree on $D$, and so $f$ is well defined and satisfies the equation.
+\end{proof}
+
+The proposition turns a question about computation into a question about pairs, and pairs can be searched for. A pair of ledgers with equal summaries and different answers is a \emph{counterexample}, and a single counterexample settles the matter for every set of ledgers that contains both. The converse is weaker. Finding no counterexample among the ledgers examined shows that the decision is available on those ledgers, and it shows nothing about longer ones unless an argument covers them.
+
+A second fact orders the summaries. Call $S'$ a refinement of $S$ if $S'(L_1) = S'(L_2)$ always implies $S(L_1) = S(L_2)$, which means that $S'$ keeps at least what $S$ keeps. Every decision available from $S$ is then available from $S'$, because a counterexample for $S'$ would be one for $S$. A summary that adds to another never loses a decision, and the table below shows the relation in the rows for the index and the counts.
+
+\section{The Search}
+
+The package \gocode{summary} makes the search concrete. It fixes a small alphabet of seven events: two successful verifications of one file with different digests, one successful verification of a second file, a failed verification of each file, and a run of a program that succeeds or fails. It turns every sequence of events of length zero through six into a real ledger chain in memory, using the function \gocode{ledger.Extend}, and so the records are the genuine article, with sequence numbers, predecessor digests, and their own digests. For each ledger it computes six summaries and six decisions, groups the ledgers by summary value, and looks, for each summary and decision, for a group in which the answers differ. Lengths are visited in increasing order, so the counterexample reported for a cell is among the shortest that exist.
+
+\golisting{internal/summary/summary.go}{The search for what summaries lose.}{lst:summary}
+
+The six summaries are the full record, represented by the digests of all its records; the counts of records by action; the per-path index of Chapter~\ref{ch:index}, without the sequence numbers and without the head digest; the index together with the counts; the last three records; and the index together with two flags that were added after seeing the decisions. The six decisions are the last digest recorded for the first file, whether the second file is currently verified, the number of failures recorded for the first file, whether the first file failed after it had succeeded, whether a run failed since the second file's last verification attempt, and the number of records. The summaries and decisions are chosen by the author and they are a sample, not a census of the questions a reader might ask. The experiment is a demonstration that loss occurs and of what form it takes.
+
+\lstinputlisting[style=shellstyle,caption={The search over all ledgers of up to six records.},label={lst:session14}]{session14.txt}
+
+\section{Reading the Table}
+
+The first row of Listing~\ref{lst:session14} is the control. The full record distinguishes all 137,257 ledgers, and every decision is available from it, as it must be. The search found no flaw in the machinery, and a test checks the same thing.
+
+The row for the counts reduces the 137,257 ledgers to 84 distinct values and keeps one decision, the number of records. It cannot say anything about a particular file, because it counts actions and not subjects. The row for the per-path index reduces the ledgers to 611 values and keeps the first three decisions. These are the questions the index was designed to answer, and for them the experiment confirms what the structure of the index already argued: the answers are fields of the entries, so no two ledgers with the same entries can disagree about them. It loses the other three, and the counterexamples say why.
+
+The fourth decision, whether the file failed after it had succeeded, is lost because the entry records how many attempts and failures there were and whether the last attempt succeeded, and not their order. The pair printed for it has three events in each ledger: a success, a failure, and a second success of the same digest in one, and a failure followed by two identical successes in the other. Both leave the file verified with the same digest, two successes, and one failure, and the index cannot tell them apart. In the first the failure came after a success, and in the second it did not. The fifth decision is lost for a simpler reason. The index takes no notice of runs, so a ledger that holds a failed run and a ledger that holds nothing have the same index. The sixth is lost because the index counts only verification records. The shortest counterexample for it has an empty ledger on one side and a ledger of one successful run on the other.
+
+The row for the index with the counts keeps everything the two parts keep, as the refinement relation requires, and adds nothing that neither had. The row for the last three records shows that recency is not sufficiency. A window of the most recent events keeps no decision at all, since a ledger can have any history before the window. The last row is the instructive one. With two flags added that answer the fourth and fifth decisions, the summary makes both of them available, and the sixth decision, which it did not anticipate and for which it has no count, is lost. The two flags could have been chosen only by knowing the questions in advance. A summary can always be extended to keep the answer to a question that is known, and it cannot be extended to keep the answer to one that has not been asked.
+
+\section{The Digest That Answers Nothing}
+
+One summary has been left out of the table on purpose. Suppose the summary is the number of records together with the digest of the last record. Since the digest depends on every record before it, two different ledgers have different digests unless a collision exists, and the summary is therefore injective, so by Proposition~\ref{prop:available} every decision is available from it. This is correct and useless. The function $f$ whose existence the proposition promises would have to recover the ledger from its digest, and nobody can compute that function. The proposition says that an answer exists, and does not say that it is computable by any procedure that is cheaper than keeping the ledger.
+
+The observation explains why the head digest in the index is not there to answer questions. It binds the index to one ledger, so that a mismatch is noticed, and it does so without making the index any more informative. It also marks the line between two uses of a summary. A summary that is kept alongside the ledger can be checked against it, and recomputed from it whenever there is doubt, and the doubt is cheap to resolve. A summary that is kept in place of the ledger can be checked against nothing, and the distinctions it dropped cannot be recovered when a later decision needs them.
+
+\section{What the Experiment Does Not Show}
+
+The experiment shows the form of the loss and does not measure its importance. A counterexample of three events establishes that the index cannot answer one question, and says nothing about whether anyone will ever ask it. The alphabet has seven events and two files, and a real ledger has many more, so the table is a small model of the situation. The cells marked \emph{no} are exact: each has a pair that anyone can check, and the test suite checks every pair afresh. The cells marked \emph{yes} for the index and the counts are backed by the argument that the answers are fields of the summary, and for the others by the search over ledgers up to six records, which is evidence for those lengths and not a proof beyond them. The search takes about fifteen seconds on the machine that produced the transcript, and its cost grows by a factor of seven with each added record, which limits how far the same method can go. The experiment is deterministic, so the manifest of Chapter~\ref{ch:manifests} that records its one parameter is sufficient to reproduce the table.
+
+The practical lesson is the one the ordering of the chapters has prepared. Derived data is safe to throw away when the source stays. A summary that replaces its source is a bet on which questions will matter, and the experiment shows exactly where such a bet can be lost.
+
+\section*{Exercises}
+
+\begin{exercise}
+Add a seventh summary that keeps the index and the last event, and a seventh decision that asks what the final event of the ledger was. Predict the new row and column before running the search, and compare.
+\end{exercise}
+
+\begin{exercise}
+Prove that the refinement relation of this chapter is a preorder, and show that the summary of the index with the counts refines both of its parts. Use the proof to explain why the table cannot contain a decision that is available from the index but not from the index with the counts.
+\end{exercise}
+
+\begin{exercise}
+Extend the alphabet with a third file and report how the number of ledgers and the running time change. State what the larger alphabet could change about the cells marked \emph{yes}, and what it could not change about the cells marked \emph{no}.
+\end{exercise}
+
+\begin{exercise}
+Design a summary of a ledger that is compact, makes the fourth and fifth decisions available, and is built without knowing those two decisions in advance. Say what you gave up to do it, and test your design with the search.
+\end{exercise}

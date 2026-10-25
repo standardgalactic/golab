@@ -1,0 +1,13 @@
+$ go test -run xxx -bench AppendBySize/n=10000 -benchtime 40x -cpuprofile cpu.out -o ledger.test ./internal/ledger
+$ go tool pprof -top -cum ledger.test cpu.out    # selected rows
+Duration: 4.24s, Total samples = 4.21s (99.38%)
+      flat  flat%   sum%        cum   cum%
+         0     0%     0%      3.44s 81.71%  golab/internal/ledger.Append
+         0     0%     0%      2.32s 55.11%  golab/internal/ledger.Load
+     0.01s  0.24%  0.24%      2.03s 48.22%  encoding/json.Unmarshal
+         0     0%  6.41%      1.16s 27.55%  golab/internal/ledger.digest
+         0     0%  6.41%      1.12s 26.60%  golab/internal/ledger.Check
+     0.08s  1.90%  8.31%      0.73s 17.34%  runtime.mallocgc
+     0.02s  0.48%  8.79%      0.67s 15.91%  encoding/json.Marshal
+     0.02s  0.48% 25.18%      0.31s  7.36%  runtime.mallocgcSmallScanNoHeader
+     0.02s  0.48% 38.00%      0.17s  4.04%  runtime.mallocgcSmallNoscan

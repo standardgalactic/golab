@@ -1,0 +1,60 @@
+\chapter{Derived Data and the Index}
+\label{ch:index}
+
+\section{Authority and Convenience}
+
+The ledger answers questions slowly. To learn the last digest recorded for a given file, a program must read every record from the start and keep the last one that mentions the file. That is acceptable for a ledger of a few hundred records and tiresome for a ledger of a million. The usual response is to keep a second structure, an index, that holds the answer to the common questions directly. The response is safe or unsafe according to a single decision, which is whether the program treats the index as a source of truth or as a summary of one. In the first case the index must be protected, backed up, and kept consistent with everything else, and a loss of the index is a loss of information. In the second case the index is derived data. It may be deleted at any time, and the only cost is the time to compute it again.
+
+The index of \golab{} is of the second kind, and the design is arranged to make that status checkable and not merely declared. Three rules are enforced in the code. The index is computed from the ledger records alone and from nothing else. It records which prefix of the ledger it was computed from, by the number of records and the digest of the last one. And the program never makes a decision from the index that it could not make by recomputing the index from the ledger, a rule that holds because every path that uses the index first obtains it from a function that falls back on rebuilding.
+
+\section{The Package}
+
+\golisting{internal/index/index.go}{The index, derived from the ledger.}{lst:index}
+
+An \gocode{Entry} summarizes what the ledger says about one path: the digest from its most recent successful verification, whether the latest attempt succeeded, the number of attempts and failures, and the sequence number of the last record that mentioned it. The fields are chosen for the questions the command will ask, and the entry deliberately keeps the last known digest even when a later attempt failed, so that a path whose verification failed once is not mistaken for a path that was never verified. The \gocode{Index} itself holds the entries in a map from path to entry, together with the number of records consumed and the digest of the last. The map is unexported, so that the only ways to change an index are the methods of the package, and every change goes through \gocode{Apply}.
+
+The method \gocode{Apply} consumes one ledger record and begins by checking that the record is the immediate successor of the last one consumed: its sequence number must be one more than the count, and its predecessor field must equal the remembered head. A record that skips ahead, repeats, or belongs to a different chain is refused with \gocode{ErrOutOfSequence}. This check is what makes the pair of numbers a faithful description of the index. The count and the head are not labels attached from outside; they are advanced by the same method that updates the entries, and the method will not advance them over a gap. Only the two verification actions affect entries. Every other record, such as a run or an admission, advances the position and leaves the entries alone, so the index covers the whole ledger even though it summarizes only part of what is in it.
+
+The function \gocode{Build} computes the index of a complete ledger by applying every record to an empty index, and it begins by calling the ledger's \gocode{Check}. A table derived from a broken chain would look authoritative while resting on nothing, and the function therefore refuses to produce one. The method \gocode{CatchUp} brings an existing index forward. It verifies that the index belongs to the ledger it is given, by checking that the record at the index's position has the digest the index remembers, then checks the chain and applies the records that follow. A shorter ledger, or a ledger whose record at that position has a different digest, produces \gocode{ErrStale}.
+
+The function \gocode{Open} ties the pieces together. It reads the index file if there is one, decodes it, and tries to catch it up. If the file is missing, unreadable, of another version, inconsistent, or not a prefix of this ledger, it builds the index from the ledger instead, and it returns the reason. The result says which of the three things happened, so that a command can tell the operator whether the index was loaded as it stood, caught up with new records, or rebuilt. The one case in which \gocode{Open} does not fall back is a ledger that fails its own check, because there is nothing authoritative left to rebuild from, and the error is returned as it is.
+
+\section{Reconstruction Equals Incremental Update}
+
+An index that can be updated by appending records and also rebuilt from scratch raises an obvious question, which is whether the two routes give the same result. If they could differ, the index would depend on its history, and the claim that it is derived from the ledger alone would be false.
+
+\begin{proposition}\label{prop:rebuild}
+Let $L$ be a ledger of $n$ records that satisfies \gocode{Check}, and let $0 \le k \le n$. The encoding of the index obtained by building from the first $k$ records and then calling \gocode{CatchUp} with $L$ is byte for byte the encoding of the index built from all of $L$.
+\end{proposition}
+
+\begin{proof}
+\gocode{Build} is the fold of \gocode{Apply} over the records from the empty index, and \gocode{CatchUp} continues the same fold from the position $k$ over the remaining records. The state of an index is its count, its head, and its map of entries, and \gocode{Apply} computes the new state from the old state and the record by a deterministic rule that consults nothing else, no clock, no file, and no iteration over the map. After $n$ applications the two routes have applied the same rule to the same records in the same order starting from equal states, so they end in equal states. The encoding of an index depends only on its state, because the entries are written sorted by path and the count and head are written as they stand. Equal states therefore have equal encodings.
+\end{proof}
+
+The proof rests on facts that the code could lose without the compiler noticing. If \gocode{Apply} read the current time, or consulted an environment variable, or built part of its state by ranging over a map and so depended on the randomized iteration order, the proof would break and the proposition would be false. The sorted output of \gocode{Entries} exists for the same reason, and the test that checks the proposition does so for every cut point $k$ from zero to the length of the ledger. As in the earlier chapters, the test checks instances and the argument covers the cases, and the argument is only as good as the discipline that keeps \gocode{Apply} pure.
+
+\golisting{internal/index/index_test.go}{Tests for the index.}{lst:index-test}
+
+\section{What the Index Does Not Protect Against}
+
+The chain of digests gives the index a way to notice that it belongs to a different ledger or has fallen behind, and it gives no way to notice that someone edited the index. The head and the count are checked against the ledger. The entries are not, because the check that would compare them is the check that would rebuild them. An index file whose head and count match the ledger but whose entries have been altered is accepted by \gocode{Open} and used. The fault is not in the code, which does what it says. It follows from the structure: a summary that is cheaper than the source cannot be verified against the source without paying the cost of the source.
+
+Two responses are available, and the book takes the first. The index is treated as untrusted input whose effect is bounded. The command that uses it, which the next chapter presents, always hashes the files on disk itself and uses the index only to remember what the ledger last recorded, so a falsified entry can produce a wrong report that a file changed or did not change, and it cannot produce a record in the ledger or a decision to admit anything. The command that writes the index offers a flag that rebuilds it unconditionally, which is the remedy when an operator has reason to doubt the file. The second response is to store in the index a digest of its own entries, which detects accidental damage and not a deliberate edit by someone who can recompute it, and the third exercise asks for it.
+
+\section*{Exercises}
+
+\begin{exercise}
+Extend \gocode{Entry} with the time of the first and last attempts, taken from the ledger records. Explain why the time must come from the record and not from the clock at the moment of indexing, and show how the proof of Proposition~\ref{prop:rebuild} would fail if it came from the clock.
+\end{exercise}
+
+\begin{exercise}
+Add a second index, from action name to count, and show that the single pass in \gocode{Build} can fill both. Discuss whether the two should be one type or two, and how \gocode{Open} would decide that either is stale.
+\end{exercise}
+
+\begin{exercise}
+Store in the index file a digest of its entries and check it on load. State exactly which edits the check detects and which it does not, and explain why it does not make the index authoritative.
+\end{exercise}
+
+\begin{exercise}
+The method \gocode{CatchUp} calls \gocode{Check} on the whole ledger on every call, which makes catching up proportional to the size of the ledger and not to the number of new records. Propose a variant that checks only the new records and the link to the old head, state what it assumes about the old records, and say when that assumption is unsafe.
+\end{exercise}

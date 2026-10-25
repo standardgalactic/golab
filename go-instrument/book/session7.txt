@@ -1,0 +1,35 @@
+$ golab serve -addr 127.0.0.1:18080 -deny bo &
+listening on 127.0.0.1:18080
+$ curl -s -w " [%{http_code}]\n" http://127.0.0.1:18080/healthz
+{"status":"ok"}
+ [200]
+$ curl -s -w " [%{http_code}]\n" http://127.0.0.1:18080/v1/ledger/head
+{"error":"Unauthorized"}
+ [401]
+$ curl -s -w " [%{http_code}]\n" -H 'Authorization: Bearer rsecret' http://127.0.0.1:18080/v1/ledger/head
+{"head":"","records":0}
+ [200]
+$ curl -s -w " [%{http_code}]\n" -H 'Authorization: Bearer rsecret' --data @batch.json http://127.0.0.1:18080/v1/admit
+{"error":"Forbidden"}
+ [403]
+$ curl -s -w " [%{http_code}]\n" -H 'Authorization: Bearer wsecret' --data @batch.json http://127.0.0.1:18080/v1/admit
+{"counts":{"admitted":1,"refused":1},"judgments":[{"id":"a","disposition":"admitted","receipt":"1243f922ac053fd9630ac3226527913c9e84ec244418dfc47ec41f2882c972af"},{"id":"b","disposition":"refused","receipt":"79d63a9261e40de63c9763a4d6d0acb0c3be2d5cd4dbe5485aa0d6bf3e7a8981"}],"ledger_seq":1}
+ [200]
+$ curl -s -w " [%{http_code}]\n" -X DELETE http://127.0.0.1:18080/v1/admit
+{"error":"Method Not Allowed"}
+ [405]
+$ curl -s -w " [%{http_code}]\n" http://127.0.0.1:18080/v1/nothing
+{"error":"Not Found"}
+ [404]
+$ curl -s -w " [%{http_code}]\n" -H 'Authorization: Bearer rsecret' http://127.0.0.1:18080/v1/ledger/head
+{"head":"3baa709af34022d6f369b65316d38bd5de028fc20deb7671b8940e6d51e7aef3","records":1}
+ [200]
+$ kill -TERM $PID
+(server exit status 0)
+listening on 127.0.0.1:18080
+shutting down
+stopped
+$ golab audit
+ledger holds: 1 records
+$ cut -d, -f1,3,4,5 golab-ledger.jsonl
+{"seq":1,"action":"admit","subject":"http","detail":{"admitted":"1"

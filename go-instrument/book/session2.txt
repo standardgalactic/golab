@@ -1,0 +1,23 @@
+$ golab admit -deny bob -scope lab/a -gate REVIEW -project lab/a records.jsonl
+admitted     r1  7b942872d24a
+refused      r2  1a6eaf32f1b9
+unscoped     r3  4280dca9df98
+duplicate    r4  441e98d49986
+malformed    r5  0777ddd8d006
+gated        r6  0c7bb6278674
+active in "lab/a": 1 records
+(exit status 0)
+$ golab admit -project lab/b records.jsonl
+admitted     r1  7b942872d24a
+admitted     r2  1a6eaf32f1b9
+admitted     r3  4280dca9df98
+duplicate    r4  441e98d49986
+malformed    r5  0777ddd8d006
+admitted     r6  0c7bb6278674
+golab: "r3" refers to "r1", which is not in scope "lab/b": active record refers to an inactive record
+(exit status 1)
+$ golab audit
+ledger holds: 2 records
+$ cat golab-ledger.jsonl
+{"seq":1,"time":"2026-10-25T17:08:51Z","action":"admit","subject":"records.jsonl","detail":{"active":"1","admitted":"1","duplicate":"1","gated":"1","malformed":"1","records":"6","refused":"1","unscoped":"1"},"prev":"","digest":"3331396374e6bf1715ae6a552acbe5396f2186c724cb76edbf8685d9292655d4"}
+{"seq":2,"time":"2026-10-25T17:08:51Z","action":"admit","subject":"records.jsonl","detail":{"activation":"\"r3\" refers to \"r1\", which is not in scope \"lab/b\": active record refers to an inactive record","admitted":"4","duplicate":"1","malformed":"1","records":"6"},"prev":"3331396374e6bf1715ae6a552acbe5396f2186c724cb76edbf8685d9292655d4","digest":"ff8151dc5ad0678774c0a5d90ba856f73c7f62bcdaa0b0d7994b9d8463fea168"}

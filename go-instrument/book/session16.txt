@@ -1,0 +1,9 @@
+$ golab-static manifest -check checks.manifest.json papers
+setting added: -trimpath
+setting removed: CGO_CFLAGS
+setting removed: CGO_CPPFLAGS
+setting removed: CGO_CXXFLAGS
+setting CGO_ENABLED: "1" -> "0"
+setting removed: CGO_LDFLAGS
+golab: 6 differences from the saved manifest
+(exit status 1)

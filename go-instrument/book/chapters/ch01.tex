@@ -1,0 +1,115 @@
+\chapter{A Program Is a Controlled Transition}
+\label{ch:transition}
+
+\section{The Case for a Compiled Tool}
+
+Go occupies a particular position among programming languages. It compiles to native executables, it manages memory automatically, it has structural interfaces, explicit error handling, and lightweight concurrency, and it ships with a standard library broad enough that many useful programs need no outside dependencies at all. Its syntax is deliberately restrained, which means that a reader can learn most of the language in a short time, but its operational reach is large. A program written in Go can traverse a filesystem, launch and supervise other programs, transform data, serve network requests, and run the same way on a laptop, in a scheduled job, and inside a container.
+
+For a reader accustomed to Bash, Go at first looks unnecessarily elaborate. A shell script can list files, filter text, and invoke a converter in a handful of lines, whereas the equivalent Go program needs declarations, a compilation step, and explicit handling of every error. The elaboration pays for itself when a workflow has to preserve distinctions that a shell leaves unstated. Consider a research directory that holds source documents, generated PDFs, transcripts, measurements, and intermediate files. A script can find the files and call a converter on each. Suppose, however, that one conversion fails, that an output is older than its source, or that a machine-generated summary has been mistaken for the document it summarizes. The difficulty is no longer that of executing commands. It is the difficulty of maintaining a relation between operations, evidence, and the actions that the evidence permits afterward, and a tool that is expected to maintain such a relation needs a way to name its states, to refuse transitions that should not occur, and to leave a record of what it did. The shell remains the better instrument for brief interactive composition of commands, and nothing in this book proposes that it be abandoned. The proposal is narrower: when a sequence of convenient commands has become a system whose intermediate states and failure modes matter, it is time to write the system down in a language that can hold those states in its types.
+
+\section{The Smallest Program}
+
+The first program prints one line. It is reproduced here exactly as it exists in the \golab{} module, under \gocode{examples/ch01\_hello}.
+
+\golisting{examples/ch01_hello/main.go}{The minimal program.}{lst:hello}
+
+A Go source file begins by naming its package. A package named \gocode{main} that defines a function named \gocode{main} is a program, and the function is where execution begins. The \gocode{import} declaration makes the standard package \gocode{fmt} available, and \gocode{fmt.Println} writes its arguments to standard output followed by a newline. Executed with \gocode{go run}, the program compiles and runs in one step.
+
+\begin{lstlisting}[style=shellstyle,caption={Running the minimal program.}]
+$ go run ./examples/ch01_hello
+Continuation begins.
+\end{lstlisting}
+
+Unlike a Bash script, which is read and interpreted by a shell each time it runs, a Go program is compiled to machine code before it runs. The \gocode{go build} command performs the compilation alone and leaves an executable behind, which can then be run from a shell, scheduled by another tool, or copied into a container image. For programs that depend only on the standard library, that executable is ordinarily self-contained, although its portability is still bounded by the operating system and processor architecture for which it was built. A module, which is the unit in which Go code is versioned and built, is created with \gocode{go mod init}; the laboratory tool of this book is the module named \gocode{golab}, and every path in the listings is relative to its root.
+
+\section{Computation as a Transition System}
+
+A program can be described abstractly as a transition. Let $S$ be the set of states the program can occupy, $I$ the set of inputs it can receive, $O$ the set of outputs it can produce, and $E$ the set of exceptional outcomes it can report. A single step of the program is then a map
+\[
+T : S \times I \longrightarrow S \times O \times E,
+\]
+which takes a state and an input and yields a successor state together with an output and a possible error. The description is not peculiar to Go, and it is deliberately coarse, since it says nothing about how the step is carried out. Its use is that it separates three things that a casual description of a program runs together: what the program remembers between steps, what it is asked to do, and what happens as a consequence.
+
+The simplest nontrivial case is a counter. Its state is a single integer, and the operation it supports adds one to it. The version below is the example from the module under \gocode{examples/ch01\_counter}.
+
+\golisting{examples/ch01_counter/main.go}{A counter whose transition returns a new state.}{lst:counter}
+
+The program prints \gocode{0} and then \gocode{1}. The point of the example is the manner in which \gocode{Increment} treats its argument. In Go, an argument of struct type is passed by value, so the function receives a private copy of \gocode{State}, increments the copy, and returns it. The variable \gocode{current} in \gocode{main} is not changed. The step therefore has the shape $s_{t+1} = T(s_t)$ with the old state still available for comparison, which is exactly the shape of the abstract definition. A program written in this style makes each transition visible as a function call whose input and output can both be inspected, and that visibility is what later chapters rely on when they attach a policy to a transition or a record to its outcome.
+
+\begin{remark}
+Process-oriented accounts of computation, including the SpherePOP calculus that appears elsewhere in the author's work, ask of any system not only which state it is in but which transitions it permits, which consequences of a transition persist, and which earlier histories remain reachable. That vocabulary suggests the questions this book asks of \golab{}. It does not follow that Go implements any such calculus. Go supplies functions, values, and types, and the distinctions of a richer theory have to be encoded by the programmer in those materials.
+\end{remark}
+
+\section{Admissibility}
+
+Not every proposed transition should be accepted. Suppose the counter must never become negative. The requirement can be stated as an admissibility condition, a function $A$ that inspects the current state and the proposed input and answers whether the transition may proceed:
+\[
+A(s,i) =
+\begin{cases}
+1 & \text{if the proposed transition is permitted},\\
+0 & \text{otherwise.}
+\end{cases}
+\]
+The transition is then defined only where $A(s,i)=1$. Where $A(s,i)=0$ the system reports a refusal and the state is left exactly as it was.
+
+Go expresses refusal through ordinary return values. A function that can fail returns its result together with a value of the built-in type \gocode{error}, and the value \gocode{nil} means that no error occurred. The example below, from \gocode{examples/ch01\_decrement}, applies the convention to the counter.
+
+\golisting{examples/ch01_decrement/main.go}{A decrement that refuses to produce a negative state.}{lst:decrement}
+
+Run with a counter of zero, the program prints \gocode{Rejected: negative state prohibited}. Two features of the example deserve attention. The first is that the distinction between a proposed transition and an accepted one is visible in the control flow: the call to \gocode{Decrement} proposes, the test of \gocode{err} decides, and only the branch in which \gocode{err} is \gocode{nil} proceeds to use the new state. The second is that on refusal the function returns the original state unchanged, so a caller who inspects the returned state after a failure sees the state from before the attempt. Both features are conventions of Go programming and neither is enforced by the compiler. A caller is free to write \gocode{next, \_ := Decrement(current)} and continue as though nothing had been refused, and the compiler will accept the program. Static analysis tools outside the compiler can flag discarded errors, but the language itself does not require that an error be examined. This gap between reporting a failed transition and enforcing an admissibility boundary is the subject of the fourth exercise at the end of this chapter, and it returns in Chapter~\ref{ch:errors}.
+
+A more elaborate system will distinguish validation, authorization, and commitment, which are three different questions that are easily collapsed into one function. Validation asks whether the proposed input is well formed. Authorization asks whether the actor is entitled to request it. Commitment asks whether the resulting change is made durable. Part~II returns to these separations. For now it is enough to note that the single function \gocode{Decrement} answers only the first of them and that nothing in the signature says so.
+
+\section{Admissibility Without Overflow}
+
+A bounded counter exposes a hazard that every program with arithmetic must face. Fix a maximum value $M$ and require that the counter stay in the interval $[0, M]$. Adding a caller-supplied amount $\delta$ is then admissible when the sum lies in that interval. The obvious test computes $c+\delta$ and compares the result with the bounds, but in Go the signed integer types wrap around on overflow without any error or panic, so a sum that exceeds the largest representable integer silently becomes a large negative number, and a test that was meant to protect the bound can be defeated by the very arithmetic it performs. The test must therefore be arranged so that it never computes a quantity that can overflow.
+
+\golisting{internal/transition/transition.go}{The transition package, with an overflow-safe admissibility test.}{lst:transition}
+
+The function \gocode{Add} in Listing~\ref{lst:transition} applies the principle on both sides of the interval. When $\delta \ge 0$ the transition is admissible exactly when $\delta \le M - c$, and the right-hand side lies between $0$ and $M$ for every legitimate state $c$, so it cannot overflow. When $\delta < 0$ the transition is admissible exactly when $\delta \ge -c$, and since $c \ge 0$ the quantity $-c$ is always representable. The following proposition records the argument.
+
+\begin{proposition}\label{prop:add}
+Let $0 \le c \le M$ and let $\delta$ be any integer in the representable range. Then $0 \le c+\delta \le M$ if and only if either $\delta \ge 0$ and $\delta \le M-c$, or $\delta < 0$ and $\delta \ge -c$. Moreover, evaluating $M-c$ and $-c$ cannot overflow.
+\end{proposition}
+
+\begin{proof}
+If $\delta \ge 0$ then $c+\delta \ge 0$ automatically, and $c+\delta \le M$ holds exactly when $\delta \le M-c$. If $\delta < 0$ then $c+\delta \le M$ automatically, and $c+\delta \ge 0$ holds exactly when $\delta \ge -c$. Because $0 \le c \le M$, the value $M-c$ lies in $[0,M]$ and the value $-c$ lies in $[-M,0]$, and both intervals are contained in the representable range whenever $M$ is.
+\end{proof}
+
+The reason for writing the lower-bound test as $\delta < -c$ and not as $-\delta > c$ is not cosmetic. In two's complement arithmetic the most negative integer has no positive counterpart, so negating it yields itself, and the apparently equivalent test accepts exactly the input that it should reject most firmly. The first version of \gocode{Add} written for this chapter used the negated form, and it was the table-driven test in Listing~\ref{lst:transition-test}, which includes the most negative integer as a case, that rejected it. The episode is retained in the text because it illustrates the role of tests in the method of the book: a test is the means by which a claim about admissibility is checked against the arithmetic of the machine on which it must hold.
+
+\golisting{internal/transition/transition_test.go}{Table-driven tests for the transition package.}{lst:transition-test}
+
+The test file shows the standard shape of a Go test. A function whose name begins with \gocode{Test} and which takes a pointer to \gocode{testing.T} is run by the \gocode{go test} command. The table in \gocode{TestAdd} lists cases as data, and each case is run as a named subtest, so that a failure identifies the case that failed. The comparison \gocode{errors.Is(err, c.err)} asks whether the returned error is, or wraps, the expected sentinel value, a technique taken up in Chapter~\ref{ch:errors}.
+
+\section{From Transitions to Workflows}
+
+The step from a counter to a workflow is a change of subject matter and not of method. Suppose that the task is to list the regular files below a directory. In Bash the answer is a single command, \gocode{find . -type f}. The corresponding Go program, from \gocode{examples/ch01\_walk}, is considerably longer.
+
+\golisting{examples/ch01_walk/main.go}{Listing regular files below the current directory.}{lst:walk}
+
+The program hands \gocode{filepath.WalkDir} a function to be called for every entry. The function receives the path, a description of the entry, and any error encountered in reaching it, and it returns an error to stop the traversal or \gocode{nil} to continue. The length of the program relative to the shell command is real, but what the extra length buys is a place to attach things the shell command has no room for: a typed description of each file, a classification, a content hash, a policy about unreadable directories, and a record of the traversal. Chapter~\ref{ch:traversal} develops those additions, and by the end of Part~I the same traversal logic sits behind commands such as \gocode{golab discover}, \gocode{golab verify}, and \gocode{golab run}.
+
+A tool of this kind has four responsibilities which can coexist in one executable but should remain distinguishable in its design. A command is an instruction that the tool accepts from its operator. An operation is the work performed in response to a command. A policy is the rule that determines whether the work is permitted. A record is the durable trace that preserves what happened. In the version of \golab{} developed in Part~I the commands are implemented in the \gocode{cmd/golab} package, the operations in the packages \gocode{artifact} and \gocode{runner}, the records in the package \gocode{ledger}, and the policy, which is still rudimentary, in the classification rules and in the admissibility checks of the transition package. Part~II gives policy a package of its own. The ordering of the book follows from this principle: distribution changes the circumstances in which computation takes place, but it does not remove the need to say what the computation is. Goroutines, channels, network services, and containers are therefore deferred until the local tool is understood, since each of them multiplies the consequences of whatever ambiguity the local tool still contains.
+
+\section*{Exercises}
+
+\begin{exercise}
+Modify the counter of Listing~\ref{lst:counter} so that the caller supplies an increment amount, and reject any transition that would exceed a fixed maximum. Write the admissibility test so that it cannot overflow, state the argument for its correctness in the manner of Proposition~\ref{prop:add}, and add table-driven tests that include the largest and smallest representable integers.
+\end{exercise}
+
+\begin{exercise}
+Modify the traversal program of Listing~\ref{lst:walk} so that it prints only files whose names end in \gocode{.go}, and then add a count of the matching files that is reported after the traversal completes. Decide what the program should do when a subdirectory cannot be read, and justify the choice.
+\end{exercise}
+
+\begin{exercise}
+Define two distinct Go types, one for a file that has been discovered and one for a file whose content has been verified, and consider which functions ought to accept each. Explain what, if anything, prevents a caller from manufacturing a value of the second type without performing any verification. Compare your answer with the treatment in Chapter~\ref{ch:types}.
+\end{exercise}
+
+\begin{exercise}
+Explain why returning an error from a function does not by itself guarantee that the caller will respond correctly. State the difference between reporting a failed transition and enforcing an admissibility boundary, and describe one mechanism, inside or outside the language, that moves a program from the former toward the latter.
+\end{exercise}
+
+\begin{exercise}
+Compare a Bash pipeline with a Go program that performs the same sequence of operations on a set of files. For each, identify which intermediate states are explicit, which errors can be observed by the operator, and which failures could leave the filesystem partly changed. Consider in particular what happens when the third of five steps fails.
+\end{exercise}

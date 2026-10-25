@@ -1,0 +1,56 @@
+\chapter{Traversing, Reading, and Hashing}
+\label{ch:traversal}
+
+\section{Walking a Directory Tree}
+
+The operations of the artifact package are in a file of their own, shown below. The first of them, \gocode{Discover}, is the typed descendant of the \gocode{find} command from Chapter~\ref{ch:transition}.
+
+\golisting{internal/artifact/scan.go}{Discovering and verifying files.}{lst:scan}
+
+The function \gocode{filepath.WalkDir} visits every entry beneath a root, calling the supplied function once for each. The function can steer the traversal through its return value. Returning \gocode{nil} continues, returning the special value \gocode{filepath.SkipDir} when positioned on a directory prevents the traversal from descending into it, and returning any other error stops the whole walk and delivers that error to the caller. \gocode{Discover} uses all three behaviours. It skips directories whose names begin with a dot, so that version-control metadata and similar private directories are not mistaken for research material, but it exempts the root itself from the rule so that a caller who names a directory beginning with a dot is not silently handed an empty result. It propagates any error that the walk reports, so that an unreadable subdirectory fails the discovery instead of shrinking it without notice. And it ignores entries that are not regular files, such as symbolic links, sockets, and devices, which is a policy choice stated in the code rather than left to accident.
+
+The choice to fail on an unreadable subdirectory is a decision about policy, and it is worth seeing that it is only one of several defensible decisions. A tool that is used interactively to explore a large tree might prefer to skip what it cannot read and report the omissions at the end. A tool whose purpose is to establish a complete inventory of evidence cannot accept a silently partial inventory, since a later conclusion that something is absent from the directory would then rest on a traversal that never looked. \golab{} takes the second view, and the first exercise at the end of the chapter asks for the alternative.
+
+Two details of the implementation repay attention. The documentation of \gocode{WalkDir} states that it visits entries of each directory in lexical order, but the order of whole paths produced by a depth-first walk is not the same as the lexical order of the complete path strings, because a directory name that is a prefix of a sibling's name interleaves differently. The function therefore sorts the final slice by path, so that the result is deterministic and independent of the details of the walk. Deterministic output matters here because the ledger will record the results of operations, and an operation whose output order varies from run to run would produce records that cannot be compared.
+
+\section{Reading Without Loading}
+
+The function \gocode{Verify} reads a file and records its digest. The central line is the call to \gocode{io.Copy}, which copies from the open file into the hash. That the call is possible at all is a consequence of one of the most characteristic features of Go, the structural interface. The value \gocode{h}, returned by \gocode{sha256.New}, implements the interface \gocode{hash.Hash}, which includes the method \gocode{Write}, and therefore it can be used wherever an \gocode{io.Writer} is expected, with no declaration anywhere that says so. A type satisfies an interface in Go merely by having the required methods. The consequence for this program is that the file is streamed through the hash in blocks, and the program never holds the whole file in memory, so that verifying a ten-gigabyte measurement file costs the same memory as verifying a ten-line note.
+
+The deferred call \gocode{defer f.Close()} schedules the closing of the file to occur when the surrounding function returns, whichever way it returns. Without it, every early return would need its own call to \gocode{Close}, and a forgotten one would leak a file descriptor. A deferred call is run at function exit in the reverse order of its registration, and its arguments are evaluated at the moment of the \gocode{defer} statement. The idiom is so common that it is the first thing a reader of Go code looks for after a successful call to \gocode{os.Open}. For a file opened only for reading, ignoring the error that \gocode{Close} can return is conventional and harmless. For a file opened for writing the same shortcut can lose a failure that matters, and the ledger package, in Chapter~\ref{ch:ledger}, checks the error of \gocode{Close} explicitly for that reason.
+
+The size comparison after the copy is a small defence against a particular failure. The \gocode{Discovered} value carries the size that the file had when the walk observed it, and \gocode{Verify} compares it with the number of bytes actually hashed. If the two differ, the file was modified between discovery and verification, and the function reports the discrepancy and returns no digest. This check is genuinely useful and also genuinely limited. It detects a change in length, and it does not detect a change that preserves length. The gap between a check made at one moment and a use made at another is a general feature of programs that work on a shared filesystem and is known in the security literature as a time-of-check to time-of-use race. \golab{} does not close it and does not claim to. The digest it records attests that the bytes read at a particular time hashed to a particular value, and nothing more.
+
+\section{What a Digest Establishes}
+
+The hash function SHA-256 maps a sequence of bytes of any length to a fixed-length digest of 256 bits, and it is designed so that finding two different inputs with the same digest is computationally infeasible. Under that assumption a recorded digest is strong evidence that a file later found to have the same digest has the same bytes, and equally strong evidence that a file with a different digest differs in at least one byte. That is the entire content of the claim. A digest does not say who wrote the file, whether its contents are true, whether the file is the one the author intended, or whether it is the original from which a copy was made. It is evidence about identity of content and about nothing else.
+
+The point is stated carefully because of a temptation that arises in any tool that records digests. Having computed and stored a digest, it is easy to speak as though the tool had verified the document, and the word invites the further inference that the document is therefore reliable. In \golab{} the type \gocode{Verified} is named for a narrow fact, that the bytes were read and hashed, and the narrow name is deliberate. Any stronger claim would need further evidence, such as a signature by a known key or a comparison with a digest published by an independent party, and the ledger in Chapter~\ref{ch:ledger} is designed so that such evidence can be added without changing the meaning of what is already recorded.
+
+The same reasoning explains why \gocode{Classify} inspects only file names. A name ending in \gocode{.summary.md} is a convention adopted by the operator, and a file with that name might, through error or intent, contain the original text of a source. The classification is documented in the code as a convention, and it is useful because it is cheap and usually right. It is not a verification of the role of the file, and a stricter tool would record, alongside the classification, how it was obtained.
+
+\section{Testing Against the Filesystem}
+
+The tests for the artifact package build their own small directories, and doing so introduces a technique worth learning early. The method \gocode{t.TempDir} returns a fresh directory that the testing framework removes when the test finishes, so a test can create whatever files it needs without risk to the working tree and without cleaning up. The helper function \gocode{write} in the test file creates intermediate directories and writes a file, and calls \gocode{t.Helper} so that a failure inside it is reported at the line of the test that called it. The first test builds a directory containing one source, one output, one summary, and a hidden directory, and checks both that the hidden file is skipped and that each of the others receives the intended classification.
+
+\golisting{internal/artifact/scan_test.go}{Tests for discovery and verification.}{lst:scan-test}
+
+The second test checks the digest of the three bytes \texttt{abc} against the published test vector for SHA-256, which begins \gocode{ba7816bf} and is a standard value in the specification of the algorithm. Testing against a known external value is stronger than testing that the function returns the same thing twice, because it checks the function against an independent source of truth. The third test confirms that a missing file produces an error. The remaining test, added in Chapter~\ref{ch:types}, checks that the zero value of \gocode{Verified} claims nothing.
+
+\section*{Exercises}
+
+\begin{exercise}
+Modify \gocode{Discover} so that a directory that cannot be read is recorded in a returned list of omissions and the traversal continues. Change the signature of the function accordingly, and write a test that makes a directory unreadable. Discuss which behaviour a tool used to certify the absence of a file ought to have.
+\end{exercise}
+
+\begin{exercise}
+Symbolic links are currently ignored. Extend the discovery to report them as a separate kind, without following them, and explain what could go wrong if the walk followed links in a tree that contains a cycle.
+\end{exercise}
+
+\begin{exercise}
+Construct a scenario in which a file is modified between discovery and verification and the modification is not detected by the size check. Describe a stronger check that would catch it, and state what it would cost.
+\end{exercise}
+
+\begin{exercise}
+Replace SHA-256 with a different hash function from the standard library, changing as little of the program as possible. Explain which parts of the program had to change, and what that reveals about the role of interfaces in the design.
+\end{exercise}

@@ -1,0 +1,26 @@
+$ go test -run xxx -bench . -benchmem ./internal/ledger ./internal/index ./internal/pool
+goos: linux
+goarch: amd64
+pkg: golab/internal/ledger
+cpu: Intel(R) Xeon(R) Processor @ 2.80GHz
+BenchmarkAppendBySize/n=100-2         	     895	   1348302 ns/op	  245344 B/op	    2423 allocs/op
+BenchmarkAppendBySize/n=1000-2        	     121	  10585569 ns/op	 1768142 B/op	   24029 allocs/op
+BenchmarkAppendBySize/n=10000-2       	      12	 101893199 ns/op	19230172 B/op	  240052 allocs/op
+BenchmarkSyncCost/sync-2              	     679	   1740344 ns/op	  245331 B/op	    2423 allocs/op
+BenchmarkSyncCost/nosync-2            	    1258	    996877 ns/op	  245331 B/op	    2423 allocs/op
+goos: linux
+goarch: amd64
+pkg: golab/internal/index
+cpu: Intel(R) Xeon(R) Processor @ 2.80GHz
+BenchmarkBuild/n=1000-2         	     332	   3105787 ns/op	  662561 B/op	    8519 allocs/op
+BenchmarkBuild/n=10000-2        	      33	  34811688 ns/op	 5847500 B/op	   80525 allocs/op
+BenchmarkBuild/n=100000-2       	       4	 379772019 ns/op	59127546 B/op	  800528 allocs/op
+BenchmarkApplyOne-2             	10335445	       117.9 ns/op	      10 B/op	       0 allocs/op
+goos: linux
+goarch: amd64
+pkg: golab/internal/pool
+cpu: Intel(R) Xeon(R) Processor @ 2.80GHz
+BenchmarkVerifyAll/workers=1-2         	       5	 254820501 ns/op	 263.36 MB/s	 2136328 B/op	     773 allocs/op
+BenchmarkVerifyAll/workers=2-2         	       8	 144323960 ns/op	 464.99 MB/s	 2137198 B/op	     775 allocs/op
+BenchmarkVerifyAll/workers=4-2         	       8	 132528408 ns/op	 506.37 MB/s	 2136908 B/op	     777 allocs/op
+BenchmarkVerifyAll/workers=8-2         	      10	 116525809 ns/op	 575.91 MB/s	 2138318 B/op	     782 allocs/op

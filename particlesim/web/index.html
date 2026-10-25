@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>particlesim</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { background: #05070b; color: #d7dfec; font: 13px/1.4 system-ui, sans-serif; }
+  #app { display: flex; height: 100%; }
+  #stage { position: relative; flex: 1; min-width: 0; }
+  #view { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; cursor: crosshair; }
+  #hud { position: absolute; left: 12px; top: 10px; color: #8fa1ba; font: 12px ui-monospace, monospace; pointer-events: none; white-space: pre; }
+  #panel { width: 290px; padding: 16px; overflow-y: auto; background: #0c111a; border-left: 1px solid #1e2837; }
+  h1 { font-size: 16px; margin: 0 0 12px; }
+  .row { display: flex; gap: 8px; margin-bottom: 10px; }
+  .row > * { flex: 1; min-width: 0; }
+  button, select, input[type=number] { background: #182234; color: #e6eefb; border: 1px solid #34465f; border-radius: 6px; padding: 7px 8px; font: inherit; }
+  button { cursor: pointer; }
+  button:hover { background: #24344d; }
+  .slider { margin-bottom: 9px; }
+  .slider label { display: flex; justify-content: space-between; color: #a9b8cf; }
+  .slider input { width: 100%; accent-color: #6fb1e6; }
+  .check { display: flex; align-items: center; gap: 8px; margin: 4px 0 12px; }
+  #spark { width: 100%; height: 60px; background: #070b12; border: 1px solid #1e2837; border-radius: 6px; }
+  .cap { color: #7f90a8; margin: 4px 0 12px; font-size: 12px; }
+  .hint { color: #7f90a8; font-size: 12px; margin-top: 14px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="stage"><canvas id="view"></canvas><div id="hud"></div></div>
+  <aside id="panel">
+    <h1>particlesim</h1>
+    <div class="row">
+      <select id="preset"></select>
+      <input id="count" type="number" min="2" max="4000" step="100" value="2500" title="Particle count">
+    </div>
+    <div class="row">
+      <button id="pause">Pause</button>
+      <button id="reset">Reset</button>
+    </div>
+    <label class="check"><input id="thermo" type="checkbox"> Thermostat (hold temperature)</label>
+    <div id="sliders"></div>
+    <div class="cap">Kinetic energy per particle, last few seconds</div>
+    <canvas id="spark" width="256" height="60"></canvas>
+    <p class="hint">Drag to attract, right drag or shift drag to repel. Space pauses, R resets.</p>
+  </aside>
+</div>
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+const canvas = $('view'), ctx = canvas.getContext('2d', { alpha: false });
+const spark = $('spark'), sctx = spark.getContext('2d');
+const BUCKETS = 32;
+
+let world = { w: 120, h: 72 };
+let view = { scale: 1, ox: 0, oy: 0, dpr: 1 };
+let params = {};
+let sprites = [], spriteSize = 0;
+let colorMax = 4;
+let history = [];
+
+const SLIDERS = [
+  { key: 'gravity', label: 'Gravity', min: -2, max: 3, step: 0.05 },
+  { key: 'epsilon', label: 'Attraction (epsilon)', min: 0.1, max: 3, step: 0.05 },
+  { key: 'temperature', label: 'Target temperature', min: 0, max: 3, step: 0.05 },
+  { key: 'damping', label: 'Drag', min: 0, max: 2, step: 0.02 },
+  { key: 'dt', label: 'Time step', min: 0.001, max: 0.008, step: 0.0005 },
+  { key: 'substeps', label: 'Steps per frame', min: 1, max: 20, step: 1 },
+  { key: 'pointerStrength', label: 'Pointer force', min: 0, max: 200, step: 5 },
+  { key: 'pointerRadius', label: 'Pointer radius', min: 2, max: 30, step: 1 },
+  { key: '_color', label: 'Color scale (speed)', min: 1, max: 12, step: 0.5, local: true },
+];
+const controls = {};
+
+async function post(path, body) {
+  const r = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  if (!r.ok) throw new Error(await r.text());
+  return r.status === 204 ? null : r.json();
+}
+
+function buildPanel() {
+  const host = $('sliders');
+  for (const s of SLIDERS) {
+    const div = document.createElement('div');
+    div.className = 'slider';
+    const label = document.createElement('label');
+    const name = document.createElement('span');
+    name.textContent = s.label;
+    const out = document.createElement('span');
+    label.append(name, out);
+    const input = document.createElement('input');
+    input.type = 'range';
+    input.min = s.min; input.max = s.max; input.step = s.step;
+    input.addEventListener('input', () => {
+      const v = Number(input.value);
+      out.textContent = v;
+      if (s.local) { colorMax = v; return; }
+      post('/params', { [s.key]: v }).catch(() => {});
+    });
+    div.append(label, input);
+    host.append(div);
+    controls[s.key] = { input, out };
+  }
+  controls._color.input.value = colorMax;
+  controls._color.out.textContent = colorMax;
+}
+
+function syncControls(st) {
+  if (!st) return;
+  params = st.params;
+  for (const s of SLIDERS) {
+    if (s.local) continue;
+    const c = controls[s.key];
+    if (document.activeElement !== c.input) c.input.value = params[s.key];
+    c.out.textContent = Number(params[s.key]).toFixed(s.step < 0.01 ? 4 : 2).replace(/\.?0+$/, '');
+  }
+  $('thermo').checked = params.thermostat;
+  $('pause').textContent = params.paused ? 'Resume' : 'Pause';
+  const sel = $('preset');
+  if (!sel.options.length) {
+    for (const p of st.presets) sel.add(new Option(p, p));
+  }
+  sel.value = st.preset;
+  if (document.activeElement !== $('count')) $('count').value = st.n;
+}
+
+async function doReset() {
+  history = [];
+  try { syncControls(await post('/reset', { preset: $('preset').value, n: Number($('count').value) })); }
+  catch (e) { $('hud').textContent = e.message; }
+}
+
+$('reset').onclick = doReset;
+$('preset').onchange = doReset;
+$('count').onchange = doReset;
+$('pause').onclick = async () => syncControls(await post('/params', { paused: !params.paused }));
+$('thermo').onchange = async e => syncControls(await post('/params', { thermostat: e.target.checked }));
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+  if (e.code === 'Space') { e.preventDefault(); $('pause').click(); }
+  else if (e.key === 'r' || e.key === 'R') doReset();
+});
+
+function resize() {
+  const dpr = window.devicePixelRatio || 1;
+  const cw = Math.max(1, Math.floor(canvas.clientWidth * dpr));
+  const ch = Math.max(1, Math.floor(canvas.clientHeight * dpr));
+  canvas.width = cw; canvas.height = ch;
+  const scale = Math.min(cw / world.w, ch / world.h) * 0.97;
+  view = { dpr, scale, ox: (cw - world.w * scale) / 2, oy: (ch - world.h * scale) / 2 };
+  buildSprites();
+}
+new ResizeObserver(resize).observe($('stage'));
+
+function buildSprites() {
+  spriteSize = Math.max(3, Math.ceil(view.scale)) + 2;
+  sprites = [];
+  for (let b = 0; b < BUCKETS; b++) {
+    const c = document.createElement('canvas');
+    c.width = c.height = spriteSize;
+    const g = c.getContext('2d');
+    const hue = 220 - 220 * (b / (BUCKETS - 1));
+    const r = spriteSize / 2;
+    const grad = g.createRadialGradient(r * 0.8, r * 0.75, 0, r, r, r);
+    grad.addColorStop(0, `hsl(${hue} 90% 80%)`);
+    grad.addColorStop(1, `hsl(${hue} 85% 48%)`);
+    g.fillStyle = grad;
+    g.beginPath(); g.arc(r, r, r - 0.5, 0, Math.PI * 2); g.fill();
+    sprites.push(c);
+  }
+}
+
+function draw(buf) {
+  const dv = new DataView(buf);
+  const n = dv.getUint32(0, true);
+  const w = dv.getFloat32(4, true), h = dv.getFloat32(8, true);
+  if (w !== world.w || h !== world.h) { world = { w, h }; resize(); }
+  const t = dv.getFloat32(12, true), ke = dv.getFloat32(16, true), pe = dv.getFloat32(20, true);
+  const stepMs = dv.getFloat32(24, true), steps = dv.getUint32(28, true);
+  const p = new Float32Array(buf, 32, n * 3);
+
+  ctx.fillStyle = '#05070b';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = '#0b1018';
+  ctx.fillRect(view.ox, view.oy, w * view.scale, h * view.scale);
+
+  const half = spriteSize / 2, inv = (BUCKETS - 1) / colorMax;
+  for (let i = 0; i < n; i++) {
+    const b = Math.min(BUCKETS - 1, (p[3 * i + 2] * inv) | 0);
+    ctx.drawImage(sprites[b], view.ox + p[3 * i] * view.scale - half, view.oy + p[3 * i + 1] * view.scale - half);
+  }
+  return { n, t, ke, pe, stepMs, steps };
+}
+
+function drawSpark() {
+  const W = spark.width, H = spark.height;
+  sctx.clearRect(0, 0, W, H);
+  if (history.length < 2) return;
+  const max = Math.max(...history) * 1.1 || 1;
+  sctx.strokeStyle = '#f0a050';
+  sctx.lineWidth = 1.5;
+  sctx.beginPath();
+  history.forEach((v, i) => {
+    const x = (i / (history.length - 1)) * W, y = H - (v / max) * (H - 4) - 2;
+    i ? sctx.lineTo(x, y) : sctx.moveTo(x, y);
+  });
+  sctx.stroke();
+}
+
+let frames = 0, lastFpsT = performance.now(), fps = 0;
+async function loop() {
+  try {
+    const r = await fetch('/frame', { cache: 'no-store' });
+    const s = draw(await r.arrayBuffer());
+    frames++;
+    history.push(s.ke / s.n);
+    if (history.length > 240) history.shift();
+    const now = performance.now();
+    if (now - lastFpsT > 500) { fps = frames * 1000 / (now - lastFpsT); frames = 0; lastFpsT = now; drawSpark(); }
+    $('hud').textContent =
+      `particles ${s.n}   time ${s.t.toFixed(1)}   steps ${s.steps}\n` +
+      `fps ${fps.toFixed(0)}   sim ${s.stepMs.toFixed(1)} ms/frame\n` +
+      `KE/N ${(s.ke / s.n).toFixed(3)}   PE/N ${(s.pe / s.n).toFixed(3)}   E/N ${((s.ke + s.pe) / s.n).toFixed(3)}`;
+    requestAnimationFrame(loop);
+  } catch (e) {
+    $('hud').textContent = 'disconnected, retrying...';
+    setTimeout(loop, 500);
+  }
+}
+
+// Pointer interaction: send at most one request at a time so the final
+// "off" message cannot overtake an earlier move.
+const ptr = { mode: 0, x: 0, y: 0, dirty: false, sending: false };
+function toWorld(e) {
+  const r = canvas.getBoundingClientRect();
+  const px = (e.clientX - r.left) * view.dpr, py = (e.clientY - r.top) * view.dpr;
+  return [(px - view.ox) / view.scale, (py - view.oy) / view.scale];
+}
+canvas.addEventListener('pointerdown', e => {
+  canvas.setPointerCapture(e.pointerId);
+  [ptr.x, ptr.y] = toWorld(e);
+  ptr.mode = (e.button === 2 || e.shiftKey) ? -1 : 1;
+  ptr.dirty = true;
+  e.preventDefault();
+});
+canvas.addEventListener('pointermove', e => {
+  if (!ptr.mode) return;
+  [ptr.x, ptr.y] = toWorld(e);
+  ptr.dirty = true;
+});
+const release = () => { if (ptr.mode) { ptr.mode = 0; ptr.dirty = true; } };
+canvas.addEventListener('pointerup', release);
+canvas.addEventListener('pointercancel', release);
+canvas.addEventListener('contextmenu', e => e.preventDefault());
+setInterval(async () => {
+  if (!ptr.dirty || ptr.sending) return;
+  ptr.dirty = false; ptr.sending = true;
+  try { await post('/pointer', { x: ptr.x, y: ptr.y, mode: ptr.mode }); } catch (e) {}
+  ptr.sending = false;
+}, 25);
+
+buildPanel();
+resize();
+fetch('/state').then(r => r.json()).then(syncControls).finally(() => requestAnimationFrame(loop));
+</script>
+</body>
+</html>

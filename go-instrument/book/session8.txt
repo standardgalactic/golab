@@ -1,0 +1,24 @@
+$ ps -o pid,comm | head -3
+  PID COMMAND
+    1 process_api
+    2 kthreadd
+$ unshare --pid --fork --mount-proc ps -o pid,comm
+    PID COMMAND
+      1 ps
+$ readlink /proc/self/ns/pid; unshare --pid --fork readlink /proc/self/ns/pid
+pid:[4026531836]
+pid:[4026532264]
+$ hostname; unshare --uts sh -c "hostname demo; hostname"; hostname
+vm
+demo
+vm
+$ unshare --net cat /proc/net/dev | tail -n +3 | cut -d: -f1
+    lo
+$ unshare --mount sh -c "mount -t tmpfs none /mnt && touch /mnt/inside && ls /mnt"; ls /mnt | grep -c inside || true
+inside
+0
+$ sleep 30 & kill -TERM $!   # an ordinary process
+terminated by SIGTERM
+$ unshare --pid --fork sleep 30 &   # the same, as process 1 of a new PID namespace
+still running after SIGTERM
+terminated by SIGKILL

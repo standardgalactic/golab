@@ -1,0 +1,62 @@
+\chapter{Logs and Faults}
+\label{ch:faults}
+
+\section{Two Records With Different Jobs}
+
+The service now keeps two kinds of record, and they should not be confused. The ledger is the durable account of what the tool decided and did. It is chained, it is checked, and it refuses to grow when damaged. A log is an operational stream, written for the person who runs the service so that they can see what is happening and diagnose what went wrong. Nothing in the log is chained, lines can be lost when a process dies, and the log is not evidence of anything in the sense the ledger tries to be. The distinction decides what goes where. A refusal of an anonymous caller does not belong in the ledger, for the reason given in Chapter~\ref{ch:adjudication}, that anyone could fill the ledger by being refused, and it does belong in the log, which can be rotated and discarded.
+
+The standard library's \gocode{log/slog} package writes structured entries, each with a level, a message, and a list of named values, and its handlers render them as JSON lines or as readable text. The service holds a \gocode{*slog.Logger}, and \gocode{ServeHTTP} writes one entry per request after the handler has finished, whatever the outcome, with the method, the path, the status, the number of bytes sent, the duration in milliseconds, and the name of the principal. To know the status after the fact, the method wraps the response writer in a small recorder that remembers the status that was sent, and the recorder implements the \gocode{Unwrap} method so that code reaching for optional features of the underlying writer, such as flushing, can still find it. The level follows the status: server errors are logged as errors, client errors as warnings, and everything else as information.
+
+\lstinputlisting[style=shellstyle,caption={Three requests and the entries they produced.},label={lst:session13}]{session13.txt}
+
+The entries of Listing~\ref{lst:session13} show the three cases. A reader may fetch the head of the ledger, a reader who tries to write is refused with status 403, and a caller with an unknown token is refused with 401, with an empty principal because authentication failed. The refusals appear at the warning level, which is where an operator looks for them, and nothing about them reaches the ledger. The entries contain no credential. That is a property worth testing and not merely intending, because a log is the place where secrets leak: the test sends requests with a valid token and an invalid one and checks that neither string appears in the output, nor the word naming the authentication scheme. The query string is also left out of the entry, since a caller might put anything in it. What is logged is chosen, field by field, and the default is to leave a value out.
+
+The same discipline applies to what the service tells the client. The handlers that fail because of the server's own machinery, such as a ledger that cannot be written, now answer with the status 500 and the words \texttt{internal error}, and send the cause to the log. A message from the operating system names file paths, and a client has no use for the layout of the server's disk. The test of this behaviour points the writer at a directory that does not exist, posts a batch, and checks that the response contains no part of the path while the log entry does.
+
+\section{Faults as Inputs}
+
+A program's behaviour on success is the part its author thinks about. Its behaviour when the machine fails to cooperate is mostly unexamined until it happens, and the failures that matter most to a ledger, a full disk, a write that does not complete, a flush that fails, are the ones that tests do not produce on their own. Fault injection is the practice of producing them on purpose. There are two ways to do it, and the chapter uses both. A simulated fault replaces part of the environment with something that fails in a chosen way, and it is repeatable and fast. A real fault arranges for the environment itself to fail, and it is more convincing and more awkward.
+
+The real fault used here is a full filesystem. In a private mount namespace, as in Chapter~\ref{ch:containers}, the experiment mounts a small memory-backed filesystem of eight kibibytes and appends records to a ledger on it until an append fails. The ledger as it stood at the end of Part~V behaved as follows.
+
+\lstinputlisting[style=shellstyle,caption={Appending until the filesystem is full, before and after the repair.},label={lst:session10}]{session10.txt}
+
+In the first half of Listing~\ref{lst:session10} the thirtieth append failed with the error that the device had no space, which is the correct report. But the file was found to be exactly 8192 bytes, the whole of the filesystem, and the audit failed with an error about line 30, ending unexpectedly. The write of the thirtieth record had succeeded in part. The first bytes of the line fitted in the last block of the file, the rest did not, and the operating system returned an error after storing the fragment. The ledger now ended in half a record. Every later command that loaded the ledger failed, so the failure of one append had destroyed the usability of the whole ledger. The protection built into \gocode{Append}, which refuses to extend a broken chain, did what it was designed to do, and what it protected was a ledger that the failed append had itself broken.
+
+The repair, in the second half of the listing, is to remember the length of the file before writing and to cut the file back to that length if the write does not complete. The same experiment now ends with the same twenty-nine successful appends and the same error on the thirtieth, a file of 8134 bytes, and an audit that finds twenty-nine records and a valid chain. The failed append left no trace in the file. The fix is a few lines in the function that writes the line.
+
+\section{Seams and Simulated Faults}
+
+The real fault cannot be part of the ordinary test suite, since it needs privileges and a mount, so the repair has tests of the simulated kind. The ledger package declares a small interface, \gocode{appendFile}, naming the five methods of an open file that the writing of a record uses, and a package-level variable, \gocode{openAppend}, that returns a value of that type. In normal use the variable opens a real file. A test replaces it with a function that returns a wrapper around a real file, which can be told to write only part of a line and then fail, to refuse to truncate, or to fail when synchronizing.
+
+\golisting{internal/ledger/fault_test.go}{Simulated faults for the ledger.}{lst:fault-test}
+
+A seam of this kind costs something, and the cost should be stated. A package-level variable that tests replace is shared state, so two tests that replace it cannot run in parallel, and a test that forgets to restore it affects the tests that follow. The interface is wider than the code strictly needs, and it exists only for the tests. The alternative is to pass the opener as a parameter to every function, which changes every caller for the sake of a test. Each choice trades something, and the book takes the variable because the ledger has one write path and the number of tests that touch it is small. A larger system would likely choose differently.
+
+The first test makes the wrapper write forty bytes of a record and fail, then checks three things: that \gocode{Append} returned the disk error, that the file's bytes are identical to what they were before the call, and that a later append succeeds and the ledger loads with a valid chain. The second makes the truncation fail as well, and checks that the error reports both failures, saying that the partial record could not be removed, and that the damaged ledger is visible to \gocode{Load}, which is the honest outcome when the damage cannot be undone. The third test is the most important for the contract of the function.
+
+\section{An Error Is Not a Statement That Nothing Happened}
+
+The third test makes the synchronization fail after a complete write. \gocode{Append} returns an error, since it cannot promise that the record is on stable storage, and the record is in the file. The test checks that the ledger contains it. A function that returns an error has told its caller that something went wrong, and the usual reading is that the operation did not take effect. That reading is false here, and it is false for a large class of operations that end with a step that can fail after the effect has occurred. A caller that retries after such an error will write the record twice.
+
+The documentation of \gocode{Append} says so in a sentence: an error means that the record is not guaranteed to be present, and not that it is absent. The service passes the consequence on to its clients in the only way it can, by answering a failed append with a failure status and recording the cause in the log. A client that receives that status does not know whether its batch was recorded. The design that would let a client know is one in which the client supplies an identifier for the request and the server remembers which identifiers it has completed, so that a retry can be recognized, and the fourth exercise asks for it.
+
+The repair also has a limit. If the process or the machine stops between the partial write and the truncation, the fragment remains, and the next command to load the ledger will report the broken line and stop. This is the loud failure and not the silent one, since the ledger refuses to proceed and does not pretend. Repairing such a ledger by cutting the torn final line is a decision about trust, because the same cut could hide the deletion of a real record, and the third exercise asks for a command that makes the cut only when everything before it verifies.
+
+\section*{Exercises}
+
+\begin{exercise}
+Write a test that stops a goroutine in the middle of \gocode{writeLine}, between the write and the truncation, by using the wrapper to block, and then loads the ledger from another goroutine. Report what the loader sees and explain why the single-writer design of Chapter~\ref{ch:writer} does not prevent it.
+\end{exercise}
+
+\begin{exercise}
+Add a fault to the wrapper that makes \gocode{Close} fail after a successful write and flush. Decide what \gocode{Append} should report, and whether the record can be said to be absent, present, or unknown.
+\end{exercise}
+
+\begin{exercise}
+Write a command \gocode{repair} that removes a final line of the ledger that does not decode, only if the records before it form a valid chain, and records the repair in the ledger. Discuss what a repair that hides the removal of a valid record would look like, and what the command must report to avoid it.
+\end{exercise}
+
+\begin{exercise}
+Add an optional request identifier to the admission endpoint. Make the server remember, for a bounded time, the identifiers it has completed and the response it gave, and answer a repeated identifier with the stored response. State what the server must do about the identifier of a request whose append returned an error.
+\end{exercise}

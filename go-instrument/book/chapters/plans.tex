@@ -1,0 +1,32 @@
+\part*{The Remaining Parts}
+\addcontentsline{toc}{part}{The Remaining Parts}
+
+\chapter*{Specification of Parts III to VI}
+\addcontentsline{toc}{chapter}{Specification of Parts III to VI}
+
+The four parts that follow Part~II are specified here and are not yet written. The specification states, for each part, which Go concepts it introduces, which component it adds to \golab{}, how it connects to the questions raised in Part~I, and which claims it is committed to avoiding. Table~\ref{tab:parts} summarizes the structure, and the prose after it gives the reasoning.
+
+\begin{table}[ht]
+\centering
+\small
+\begin{tabular}{@{}p{0.2\textwidth}p{0.36\textwidth}p{0.34\textwidth}@{}}
+\toprule
+Part & Go concepts & Component added to \golab{} \\
+\midrule
+III. Concurrent Execution & Goroutines, channels, select, contexts, mutexes, the race detector & A worker pool and a single-writer ledger \\
+IV. Memory and Reconstruction & Serialization, buffered I/O, maps and sorting, atomic file replacement & Persistent indexes that can be rebuilt from the ledger \\
+V. Distributed Systems & HTTP servers, handlers, middleware, test servers, containers & An HTTP service and a container image \\
+VI. Experimental Systems & Benchmarks, structured logging, profiling, fault injection & Manifests, harnesses, and a compression experiment \\
+\bottomrule
+\end{tabular}
+\caption{The structure of Parts III to VI.}
+\label{tab:parts}
+\end{table}
+
+Part~III, Concurrent Execution, introduces goroutines, channels, the \gocode{select} statement, contexts for cancellation, and the synchronization primitives of the standard library. It builds a worker pool that verifies many files at once and replaces the append-from-any-process design of the ledger with a single goroutine that owns the file and receives records over a channel, which removes the race exhibited in the second exercise of Chapter~\ref{ch:ledger} within one process. The part treats the Go memory model as the authority on what concurrent code may assume, uses the race detector as a tool and not as a proof, since it reports only races that occur in the executions it observes, and takes care to distinguish goroutines, which are units of execution inside one process, from independently deployed services, which add network boundaries and partial failure that no amount of local concurrency reproduces. The structural analogy with the author's work on continuation is that a computation which can proceed along several branches must say which branch is bound, and the single-writer ledger is an instance in which many plausible actions are ranked in parallel and only one ordering is committed.
+
+Part~IV, Memory and Reconstruction, is about data that outlives a process. It covers the encoding packages, buffered input and output, maps and sorting, and the technique of writing a file to a temporary name and renaming it into place so that readers never see a partial file. The component it adds is an index over the ledger and the artifacts, with the discipline that the index is derived data: it can be thrown away and rebuilt from the sources and the ledger, and no decision depends on it that could not be made from them. The part uses the language of reconstruction from the author's treatment of memory only as an analogy for this engineering discipline, and it makes no claim that a cache has anything in common with remembering beyond the fact that both are reconstructible from something more authoritative.
+
+Part~V, Distributed Systems, gives the tool an HTTP interface and packages it in a container. It introduces the \gocode{net/http} package, handlers and middleware, and the test server of the standard library, and it separates routing from adjudication in the structure of the code, so that the component that decides which handler receives a request has no part in deciding whether the request is permitted. Containers are introduced only after the service works locally, so that the reader knows what is being isolated. The chapter on containers explains processes, Linux namespaces, control groups, and image layers, builds a small static binary into a minimal image, and states without ambiguity that a container packages a service and limits what it can see and consume, and that this is a different matter from deciding what the service is authorized to do.
+
+Part~VI, Experimental Systems, treats the tool itself as an object of study. It introduces benchmarks, structured logging, profiling, and fault injection, and it adds manifests that fix the inputs, the code version, and the build information of an experiment so that a result can be reproduced. Its concluding experiment compresses a ledger into a summary and then asks whether a later decision that was available from the full record is still available from the summary, which gives a small and concrete form to the principle that compression without verification can discard exactly the distinctions a later gate requires. The experiment is about records and ledgers. It is not an evaluation of any machine-learning model, and the part will not present it as one.

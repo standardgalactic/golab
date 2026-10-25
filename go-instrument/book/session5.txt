@@ -1,0 +1,22 @@
+$ golab verify -workers 4 -each papers
+c5494ba4ec9f848191fecf8b242f0e8bc98223d4024f1c503aa628f845558766  papers/d01.txt
+ee27a25b535e97d09cfa78a1b8ce59a971d777bcc0beaab0848176c04f3be1e5  papers/d02.txt
+7e23a4226f0c7a614760d70c37b1340fb5480461da98449d94732e9d59b0a68a  papers/d03.txt
+390dd0e18d4337f20285e5117e7c3f055a2cb9405258fcbfd78719d7c80a8d66  papers/d04.txt
+ba1ea46e22c396aabf3c078a773755fb1f61d047dfaac6ba7a1188ad1cc9f144  papers/d05.txt
+6a0da86687d0fb29f564a2ab9aad047cd1d3eec42cd00dcd6dae84ed50223c22  papers/d06.txt
+$ golab audit
+ledger holds: 7 records
+$ cut -d, -f1,3,4 golab-ledger.jsonl
+{"seq":1,"action":"verify-file","subject":"papers/d01.txt"
+{"seq":2,"action":"verify-file","subject":"papers/d04.txt"
+{"seq":3,"action":"verify-file","subject":"papers/d03.txt"
+{"seq":4,"action":"verify-file","subject":"papers/d02.txt"
+{"seq":5,"action":"verify-file","subject":"papers/d05.txt"
+{"seq":6,"action":"verify-file","subject":"papers/d06.txt"
+{"seq":7,"action":"verify","subject":"papers"
+$ golab verify -workers 4 -timeout 1ns papers
+golab: 6 files could not be verified: context deadline exceeded; context deadline exceeded; context deadline exceeded; context deadline exceeded; context deadline exceeded; context deadline exceeded
+(exit status 1)
+$ tail -n 1 golab-ledger.jsonl | cut -d, -f3-6
+"action":"verify","subject":"papers","detail":{"failed":"6","found":"6"

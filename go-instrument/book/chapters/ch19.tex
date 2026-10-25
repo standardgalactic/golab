@@ -1,0 +1,60 @@
+\chapter{Measurement}
+\label{ch:measurement}
+
+\section{Performance Claims Are Claims}
+
+Earlier chapters made statements about cost without measuring anything. Chapter~\ref{ch:writer} said that each append to the ledger reads and checks the whole file, so that the cost of $n$ appends grows as $n^2$, and Chapter~\ref{ch:index} said that an index saves work when it is extended more often than it is rebuilt. Both statements follow from reading the code, and both are the kind of statement that a measurement can confirm, refine, or contradict. Part~VI treats the tool as an object of study, and the first instrument is the benchmark. A statement about speed deserves the same treatment as any other claim in the book: it should say what was measured, on what, with what result, and what the result does not show.
+
+The \gocode{testing} package supports benchmarks as ordinary functions. A function whose name begins with \gocode{Benchmark} and which takes a \gocode{*testing.B} is run by \gocode{go test -bench}, and its body loops \gocode{b.N} times. The framework chooses \gocode{b.N}: it runs the function with a small value, measures, and raises the value until the total time is long enough to be reliable, then reports the time per iteration. Inside the function, \gocode{b.StopTimer} and \gocode{b.StartTimer} exclude setup work from the measurement, and \gocode{b.Run} creates sub-benchmarks, which is how one function measures a range of sizes. The flag \gocode{-benchmem} adds the number of bytes and allocations per iteration, and \gocode{b.SetBytes} lets the framework report throughput.
+
+\section{The Cost of an Append}
+
+\golisting{internal/ledger/bench_test.go}{Benchmarks for appending to a ledger.}{lst:bench-ledger}
+
+The benchmark of Listing~\ref{lst:bench-ledger} measures one append to a ledger that already holds $n$ records, for $n$ equal to a hundred, a thousand, and ten thousand. To keep $n$ constant, it restores the file to its starting contents before every iteration, with the timer stopped, so that each measured append sees a ledger of exactly the stated size. The results come from one run on a machine with two processors.
+
+\lstinputlisting[style=shellstyle,caption={Benchmarks of the ledger, the index, and the pool.},label={lst:session11}]{session11.txt}
+
+The three results for appending are 1.35 milliseconds, 10.6 milliseconds, and 102 milliseconds. Each tenfold increase in the size of the ledger multiplies the time by roughly ten, and the number of allocations grows in the same proportion, from about two thousand to about two hundred and forty thousand. The cost of one append is proportional to the number of records already present, which is the behaviour Chapter~\ref{ch:writer} predicted. The cost per record is about ten microseconds on this machine. If the trend continued, a ledger of a million records would take about ten seconds to append to once, and a ledger of a million records built by a million appends would have cost the sum, which is quadratic. The extrapolation is a statement about a straight line drawn through three points. It is not a measurement of a ledger of a million records, and the measurements here establish only that the growth is linear over the range from a hundred to ten thousand.
+
+A benchmark says how much and not why. The profiler says where.
+
+\section{Where the Time Goes}
+
+The standard toolchain can sample the running program and report which functions the samples fall in. The flag \gocode{-cpuprofile} on \gocode{go test} writes a profile, and \gocode{go tool pprof} reads it. The report distinguishes \emph{flat} time, spent in a function's own instructions, from \emph{cumulative} time, spent in the function and everything it calls, and for finding the structure of a cost the cumulative column is the useful one.
+
+\lstinputlisting[style=shellstyle,caption={Selected rows of a CPU profile of appending to a ledger of ten thousand records.},label={lst:session12}]{session12.txt}
+
+The profile in Listing~\ref{lst:session12} says that \gocode{Append} accounts for about four fifths of all the samples, the remainder being the restoration of the file between iterations. Within \gocode{Append}, loading the ledger takes the larger share, 55 percent of all samples, and nearly all of it is spent decoding JSON. Checking the chain takes 27 percent, and almost all of that is recomputing digests. The write of the new record does not appear among the visible costs. The time is going into reading and verifying the ledger that is already there, which is the work that the single-writer design of Chapter~\ref{ch:writer} was said to repeat. A writer that kept the head digest and the next sequence number in memory, and checked the file only when it opened it, would remove both of the large items from the per-append cost. That change is the third exercise of Chapter~\ref{ch:writer}, and it has a price, since the writer then trusts its own memory between appends. The measurements identify what could be saved and say nothing yet about whether the saving is worth the price.
+
+\section{The Flush to Stable Storage}
+
+Part~VI adds one thing to \gocode{Append}, a call to \gocode{Sync} on the file before it is closed, so that the record is on stable storage when the function returns and not merely in the operating system's cache. The second benchmark compares an append with and without the call, on a ledger of a hundred records, where the fixed costs dominate. The result is 1.74 milliseconds with the flush and 1.00 millisecond without, so the flush adds about 0.74 milliseconds to each append on this machine. That number belongs to this machine's storage and not to the program. A different device would give a different figure, and a filesystem in memory would give almost none. The decision to flush is a decision about durability: without it, a crash can lose records that were reported as written. For a ledger whose purpose is to be relied on after the fact, the book takes the cost, and the benchmark makes the size of that cost visible, which a decision of this kind should have.
+
+\section{The Index and the Pool}
+
+The index benchmarks measure two things. Building an index from a whole ledger in memory takes 3.1 milliseconds for a thousand records, 34.8 for ten thousand, and 380 for a hundred thousand, which is between three and four microseconds per record and again linear. Applying a single record to an existing index takes about 118 nanoseconds and allocates nothing. The ratio between the two figures is large, and it needs care. The cost of 118 nanoseconds is the cost of \gocode{Apply} alone. The method \gocode{CatchUp}, which is what \gocode{Open} calls, checks the whole chain before applying new records, as Chapter~\ref{ch:index} noted, and a check of the chain is most of what a build costs. In the present code, loading and extending an index is therefore not as cheap as the figure for \gocode{Apply} suggests, and the fourth exercise of Chapter~\ref{ch:index}, which proposes checking only the new records, is where that saving would come from.
+
+The pool benchmark hashes sixty-four files of one mebibyte with one, two, four, and eight workers. The times fall from 255 milliseconds to 144, 133, and 117, and the throughput rises from 263 to 465, 506, and 576 megabytes per second. The machine has two processors, and the step from one worker to two gives a speedup of 1.8, which is what a CPU-bound task on two processors should give. The further gains from four and eight workers are smaller, and the figure for eight is above what two processors could deliver for pure computation. The measurement does not say why. It may reflect time the workers spend waiting on the operating system, which other workers can overlap, or noise in a single run on a shared machine. A claim about the cause would need further experiments, and the measurement supports only the statement that more workers than processors still helped a little in this run.
+
+\section{What a Benchmark Cannot Say}
+
+Every number in this chapter comes from one run on one virtual machine whose other tenants are unknown. The benchmark framework reports a mean and no spread. A responsible comparison repeats each benchmark several times with the \gocode{-count} flag and compares the distributions, with a tool such as \texttt{benchstat} from the Go project, and a single figure cannot show whether a difference between two figures is larger than the run-to-run variation. The files in the pool benchmark fit in the operating system's cache after the first pass, so the figures describe hashing and scheduling and say nothing about a cold disk. The environment that produced the numbers is printed at the head of the benchmark output, with the operating system, the architecture, and the processor, and it belongs next to any figure that is quoted. A number without its environment is not a measurement of anything in particular.
+
+\section*{Exercises}
+
+\begin{exercise}
+Implement the writer that holds the head digest and the next sequence number in memory, and repeat the benchmark of this chapter for ledgers of a hundred, a thousand, and ten thousand records. Report the new figures, the new profile, and the new risks that the cache introduces.
+\end{exercise}
+
+\begin{exercise}
+Run the benchmark of the pool ten times with the \gocode{-count} flag and report the range of each figure. State which of the conclusions of this chapter survive the variation and which do not.
+\end{exercise}
+
+\begin{exercise}
+Write a benchmark of \gocode{ledger.Load} alone for the three sizes, and compare its time with the share the profile assigned to loading. Explain any discrepancy.
+\end{exercise}
+
+\begin{exercise}
+Replace the call to \gocode{Sync} with a policy that flushes once every hundred appends or every second, whichever comes first. Describe exactly what a crash can now lose, and decide whether a ledger with such a policy can still make the statement that a record reported as written is durable.
+\end{exercise}

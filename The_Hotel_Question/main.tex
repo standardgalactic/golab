@@ -1,0 +1,152 @@
+\documentclass[11pt,twoside,openright,final]{memoir}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{mathpazo}
+\usepackage[final,protrusion=true,expansion=true]{microtype}
+\usepackage{epigraph}
+\usepackage[hidelinks,bookmarks=true,pdftitle={The Hotel Question},pdfauthor={Flyxion}]{hyperref}
+
+% trim size and layout
+\setstocksize{9in}{6in}
+\settrimmedsize{\stockheight}{\stockwidth}{*}
+\setlrmarginsandblock{0.9in}{0.75in}{*}
+\setulmarginsandblock{0.85in}{0.95in}{*}
+\setheadfoot{0.3in}{0.4in}
+\setheaderspaces{*}{0.25in}{*}
+\checkandfixthelayout
+
+\linespread{1.04}
+\frenchspacing
+\clubpenalty=10000
+\widowpenalty=10000
+\setlength{\parindent}{1.35em}
+\setcounter{secnumdepth}{-1}
+\setcounter{tocdepth}{0}
+\raggedbottom
+
+% parts
+\renewcommand*{\thepart}{\ifcase\value{part}\or One\or Two\or Three\or Four\or Five\fi}
+\renewcommand*{\partnamefont}{\normalfont\large\scshape}
+\renewcommand*{\partnumfont}{\normalfont\large\scshape}
+\renewcommand*{\parttitlefont}{\normalfont\Huge\itshape}
+\renewcommand*{\midpartskip}{\par\vspace{1.2em}}
+
+\renewcommand*{\cftpartname}{Part }
+\renewcommand*{\cftpartaftersnum}{}
+\setlength{\cftpartindent}{0em}
+\setlength{\cftpartnumwidth}{4.9em}
+\renewcommand*{\cftpartfont}{\normalfont\bfseries}
+\renewcommand*{\cftpartpagefont}{\normalfont\bfseries}
+% chapters
+\makechapterstyle{hq}{%
+  \setlength{\beforechapskip}{0.7in}
+  \setlength{\afterchapskip}{0.5in}
+  \renewcommand*{\chapterheadstart}{\vspace*{\beforechapskip}}
+  \renewcommand*{\printchaptername}{}
+  \renewcommand*{\chapternamenum}{}
+  \renewcommand*{\chapnumfont}{\normalfont\large\scshape}
+  \renewcommand*{\chaptitlefont}{\normalfont\LARGE\itshape}
+  \renewcommand*{\printchapternum}{\centering\chapnumfont\thechapter\par\vskip 0.5em\centerline{\rule{1.4em}{0.4pt}}\vskip 0.6em}
+  \renewcommand*{\afterchapternum}{}
+  \renewcommand*{\printchaptertitle}[1]{\centering\chaptitlefont ##1}
+  \renewcommand*{\afterchaptertitle}{\par\nobreak\vskip \afterchapskip}
+}
+\chapterstyle{hq}
+
+% running heads
+\makepagestyle{hq}
+\makeevenhead{hq}{\small\thepage}{\small\textsc{The Hotel Question}}{}
+\makeoddhead{hq}{}{\small\itshape\rightmark}{\small\thepage}
+\makeevenfoot{hq}{}{}{}
+\makeoddfoot{hq}{}{}{}
+\makepsmarks{hq}{%
+  \def\chaptermark##1{\markboth{}{##1}}}
+\makepagestyle{partpage}
+\makeevenhead{partpage}{}{}{}
+\makeoddhead{partpage}{}{}{}
+\makeevenfoot{partpage}{}{}{}
+\makeoddfoot{partpage}{}{}{}
+\aliaspagestyle{part}{partpage}
+\aliaspagestyle{chapter}{plain}
+\makeoddfoot{plain}{}{\small\thepage}{}
+\makeevenfoot{plain}{}{\small\thepage}{}
+
+% book macros
+\newcommand{\numbered}[2]{\setcounter{chapter}{\numexpr#1-1\relax}\chapter{#2}}
+\newcommand{\interchapter}[1]{\chapter*{#1}\addcontentsline{toc}{chapter}{\protect\textit{#1}}\markboth{}{#1}}
+\newcommand{\notesheading}[1]{\chapter*{#1}\addcontentsline{toc}{chapter}{#1}\markboth{}{#1}}
+\newcommand{\scenebreak}{\par\vspace{0.8\baselineskip}\centerline{\textasteriskcentered\hspace{1.1em}\textasteriskcentered\hspace{1.1em}\textasteriskcentered}\vspace{0.8\baselineskip}\par}
+\newcommand{\partendnote}[1]{\par\vspace{2.2em}\centerline{\textit{#1}}\par\clearpage}
+\renewcommand{\epigraphsize}{\normalsize}
+\setlength{\epigraphwidth}{0.72\textwidth}
+\renewcommand{\epigraphflush}{center}
+\setlength{\beforeepigraphskip}{0pt}
+\setlength{\afterepigraphskip}{0pt}
+
+\providecommand{\tightlist}{\setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}}
+
+\begin{document}
+
+\frontmatter
+\pagestyle{empty}
+
+% half title
+\vspace*{2.2in}
+\begin{center}
+{\LARGE\scshape The Hotel Question}
+\end{center}
+\clearpage
+\thispagestyle{empty}\mbox{}\clearpage
+
+% title page
+\vspace*{1.5in}
+\begin{center}
+{\fontsize{34}{40}\selectfont\scshape The Hotel\\[0.2em] Question\par}
+\vspace{0.9em}
+\centerline{\rule{3em}{0.4pt}}
+\vspace{0.9em}
+{\large\itshape A Novel\par}
+\vfill
+{\large\scshape Flyxion}\\[0.3em]
+\vspace{1.2in}
+\end{center}
+\clearpage
+
+% copyright
+\thispagestyle{empty}
+\vspace*{\fill}
+\begin{center}\small
+\begin{minipage}{0.78\textwidth}
+\centering
+\textit{The Hotel Question}\\[0.5em]
+This is a work of fiction. The company, the countries, the towns, the officials and every person in these pages are invented, and any resemblance to real institutions or living people is a coincidence of the kind the book is about.\\[0.8em]
+This work is released into the public domain.\\[0.8em]
+First edition
+\end{minipage}
+\end{center}
+\clearpage
+
+% dedication
+\thispagestyle{empty}
+\vspace*{2.2in}
+\begin{center}\itshape For whoever answers the telephone.\end{center}
+\clearpage
+\thispagestyle{empty}\mbox{}\clearpage
+
+% epigraph
+\thispagestyle{empty}
+\vspace*{2in}
+\epigraph{For the avoidance of doubt, employees should follow the procedure above and should not attempt to investigate systems for which they are not the registered owner.}{\textit{Do a Hotel: Asking the Right Question}\\ Harbor learning module, estimated duration twelve minutes}
+\clearpage
+\thispagestyle{empty}\mbox{}\clearpage
+
+\pagestyle{plain}
+\tableofcontents*
+\clearpage
+
+\mainmatter
+\pagestyle{hq}
+
+\input{body.tex}
+
+\end{document}

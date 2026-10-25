@@ -1,0 +1,22 @@
+$ golab experiment compress -n 6
+137257 ledgers of up to 6 records
+
+summary               distinct   D1   D2   D3   D4   D5   D6
+every record            137257  yes  yes  yes  yes  yes  yes
+action counts               84   no   no   no   no   no  yes
+per-path index             611  yes  yes  yes   no   no   no
+index and counts          1190  yes  yes  yes   no   no  yes
+last three records         400   no   no   no   no   no   no
+index and two flags       1049  yes  yes  yes  yes  yes   no
+
+D1  last digest of a
+D2  is b verified now
+D3  failures of a
+D4  a failed after a success
+D5  run failed since b's last attempt
+D6  number of records
+
+shortest counterexamples found, for summaries other than "every record":
+  per-path index, D4: [verify a=d1; fail a; verify a=d1] and [fail a; verify a=d1; verify a=d1] give "true" and "false"
+  per-path index, D5: [(empty ledger)] and [run failed] give "false" and "true"
+  per-path index, D6: [(empty ledger)] and [run succeeded] give "0" and "1"

@@ -1,0 +1,66 @@
+\chapter{Routing, Adjudication, and Admission}
+\label{ch:adjudication}
+
+\section{Three Questions Again}
+
+Chapter~\ref{ch:inscription} separated three questions that a small program tends to answer in one place: whether a record is well formed, whether the actor is entitled to request the change, and whether the change is made durable. The service has a parallel set of three, and the temptation to merge them is just as strong, because a web framework makes it easy to write a single function that looks at the request, decides whether the caller may do what it asks, and does it. The service keeps them apart in its structure. \emph{Routing} chooses which handler a request is for, from the method and the path. \emph{Adjudication} decides whether the caller may use that handler. \emph{Admission} is the pipeline of Part~II, which decides what becomes of the content of a record, and it happens inside a handler, after the first two have been settled. The three have different inputs, different authorities, and different failure statuses, and the code is arranged so that each is a separate piece.
+
+\section{Routing Decides From the Request Line}
+
+\golisting{internal/service/route.go}{A routing table that sees only the method and the path.}{lst:route}
+
+The router is a table of routes, each naming a method, an exact path, a handler, and the requirement a caller must meet. Its method \gocode{Match} takes two strings, the method and the path, and returns a route or a status code explaining the absence of one. The signature is the point. A function that is given only the method and the path cannot read a header, a credential, a query parameter, or the body, and so routing cannot come to depend on who is asking or what they sent. The compiler guarantees that much. That nothing else leaks into the choice, for instance through a package variable, is a matter of reading the thirty lines of the function.
+
+When no route matches, the router distinguishes two situations that clients need to tell apart. If no route has the path, the answer is 404. If some route has the path but none with the method, the answer is 405, accompanied by an \texttt{Allow} header that lists the methods the path does support, in sorted order so that the header is the same on every request. The test \gocode{TestRouterDecidesFromMethodAndPathOnly} checks a table of such cases, including a trailing slash, which is a different path and receives 404, since the table matches paths exactly.
+
+\section{Adjudication Is a Function of Two Values}
+
+\golisting{internal/service/auth.go}{Bearer tokens, principals, and the permission rule.}{lst:auth}
+
+Adjudication has two steps, which the code keeps distinct. \emph{Authentication} establishes who is calling. The service reads a bearer token from the \texttt{Authorization} header and looks it up in a list of configured tokens, each of which names a principal and says whether it may write. \emph{Authorization}, the permission rule, asks whether that principal may do what the route requires. The function \gocode{Permit} takes the principal, a flag saying whether authentication succeeded, and the route's requirement, and returns a status and a verdict. It reads nothing else. A route's requirement is one of three values: nothing, which makes the route public, as the health check is; read, which needs any authenticated principal; and write, which needs one allowed to write. An undeclared requirement is refused, for the reason that the policy vocabulary of Chapter~\ref{ch:interfaces} fails closed on an undeclared verdict: a system that decides what is permitted should deny what it does not recognize.
+
+Two details of authentication come from the standard library and are worth stating. The comparison of tokens uses \gocode{subtle.ConstantTimeCompare}, which takes the same time whether the first byte or the last differs, so that a client cannot learn a token a byte at a time by measuring how long the server takes to refuse a guess. The loop also compares against every configured token and does not stop at the first match, so that the time does not reveal the position of the token in the list. The parsing of the configuration rejects an empty token and a token assigned to two principals, because a shared credential would make the identity of the caller ambiguous.
+
+\begin{proposition}\label{prop:permitted}
+For every request that reaches a handler of the routing table, \gocode{Permit} returned success for the principal derived from the request and the requirement of the route that matched.
+\end{proposition}
+
+\begin{proof}
+Every request enters through \gocode{Server.ServeHTTP}. The only call that runs a route's handler is the last statement of that method, and it is reached only after \gocode{Match} has returned a route and \gocode{Permit} has returned success for that route's requirement. Any other path through the method returns after writing an error.
+\end{proof}
+
+The proof depends on facts about the code that the compiler does not check. The handlers are methods of \gocode{Server}, and another function in the package could call one directly and skip the check, and the value that \gocode{New} returns exposes no handler outside the package. The argument is therefore local to the package and holds as long as \gocode{ServeHTTP} remains the only way in. The tests supply evidence of the property at its most important point. A principal who may only read posts a valid batch and receives 403, an anonymous caller posts and receives 401, and in both cases the ledger afterward has no records, so the handler, which would have appended one, did not run.
+
+\section{Routing Comes First}
+
+The order of the steps in \gocode{ServeHTTP} is a decision with consequences. Because routing precedes adjudication, a request for a path that does not exist receives 404 whether or not it carries a valid credential, and a request with the wrong method receives 405 with an \texttt{Allow} header under every credential. The test \texttt{Test\-Routing\-Errors\-Do\-Not\-Depend\-On\-Credentials} checks both statements across four different credentials. The alternative, in which every request is authenticated before anything else, would answer unauthenticated requests with 401 even for paths that do not exist, which reveals nothing about the table. The service takes the first order because it makes the router's behaviour a function of the request line alone, and the cost is that an anonymous caller can learn which paths exist by observing which ones answer 401 or 403 and which answer 404. For a service whose routes are published this costs nothing, and for one whose routes are secret it would be a reason to reverse the order.
+
+\section{Admission Is a Different Judgment}
+
+\lstinputlisting[style=shellstyle,caption={A session with the service: refusal, admission, and shutdown.},label={lst:session7}]{session7.txt}
+
+The handler for \gocode{POST /v1/admit} runs only for a caller who may write, and what it does is the work of Part~II. It decodes a batch of records, inscribes each, validates the batch as a whole, and admits the valid set under the policy the server was started with. The caller of the transcript uses the token of a principal who may write, and the server was started with the policy that denies the author \texttt{bo}. The response says that record \texttt{a} was admitted and \texttt{b}, which was written by \texttt{bo}, was refused, and gives the receipt of each. The adjudication let the caller through, and the policy still refused one of the records, which shows the separation working: the caller is entitled to submit, and the content is judged on its own terms.
+
+A batch that fails validation, for instance because a record refers to one that is not in the batch, is answered with status 422 and is recorded in the ledger as a failed admission, as the command-line version records its own failures in Chapter~\ref{ch:inscription}. The tests cover malformed JSON and unknown fields, which are answered with 400 and are not recorded, since no batch was ever formed, and an oversized body, which is answered with 413. The distinction between a request that never became a batch and a batch that failed validation is one a reader of the ledger can rely on.
+
+The ledger record for an admission carries the name of the principal. The first limit stated in Chapter~\ref{ch:ledger} was that the tool had no notion of identity, and here it acquires a limited one. What the ledger now records is the name attached to the token that made the request. It does not identify a person, since anyone holding the token is that principal, and the token travels as a plain header. The service as written speaks plain HTTP. A bearer token sent over a network that anyone can observe is observable, so the service belongs behind a terminator of transport encryption, or on a loopback interface, and the book does not claim more for it than that.
+
+Refusals at the adjudication stage are not recorded. A request that receives 401 or 403 leaves no mark in the ledger. The omission is deliberate and has a cost. A ledger that recorded every refused request would let any anonymous client append to it at will, filling it with entries and making the cost of an attack the cost of the ledger's growth. The question of what the ledger should say about refusals, raised at the end of Chapter~\ref{ch:ledger}, therefore has two different answers according to who is refused. A refusal by policy, which concerns a record from an authenticated caller, is recorded as part of the admission. A refusal of the caller is not, and an operator who needs it would use the server's logs, which Part~VI takes up.
+
+\section*{Exercises}
+
+\begin{exercise}
+Add a route for \gocode{DELETE} on the ledger and give it a requirement that no principal can meet. Show with a test that the handler is unreachable, and explain what the 403 reveals to a caller that a 404 would not.
+\end{exercise}
+
+\begin{exercise}
+Reverse the order of routing and adjudication so that every request is authenticated first. Rewrite the two tests of this chapter that depend on the order, and state which property of the router is lost.
+\end{exercise}
+
+\begin{exercise}
+Add a rate limit on failed authentication per remote address, recording the address and the count in memory. Discuss what the limit does to a legitimate client behind a shared address, and why the limit is state that a restart loses.
+\end{exercise}
+
+\begin{exercise}
+Write a handler that records refused callers in the ledger but caps the recording at a fixed number per minute, writing a single summary record when the cap is exceeded. Decide what the summary should say and whether it can itself be used to harm the ledger.
+\end{exercise}

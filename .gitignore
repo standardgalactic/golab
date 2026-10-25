@@ -1,0 +1,17 @@
+*.aux
+*.log
+*.out
+*.toc
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+
+*.json
+*.srt
+*.tsv
+
+# Local development artifacts
+.DS_Store
+*.exe
+*.test
+coverage.out

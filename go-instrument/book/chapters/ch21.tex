@@ -1,0 +1,54 @@
+\chapter{Manifests and Reproducibility}
+\label{ch:manifests}
+
+\section{What a Result Depends On}
+
+A figure from an experiment is a statement about a particular run, and a reader who wants to rely on it needs to know what the run consisted of. At least three things determine a result: the inputs it was computed from, the settings that were chosen, and the program that did the computing. A fourth, the machine and its state, matters for some results and not for others. The benchmarks of the previous chapter depend on all four, which is why their output opens with a description of the machine. An experiment whose result does not depend on timing, such as the one of the next chapter, depends only on the first three, and the first three can be written down.
+
+A \emph{manifest} is that written record. The manifest of \golab{} lists the experiment's name and its parameters, the version of the Go toolchain that built the program, the module path, the build settings that the toolchain embedded in the binary, and for each input file its path, its size, and its SHA-256 digest. The package that builds it follows two rules that make it useful as evidence. It contains no clock reading and no machine name, so that two runs under the same conditions produce byte-identical manifests, and the paths of inputs are recorded relative to the input directory, so that moving the files does not change the manifest. The time at which a manifest was made is recorded by the ledger entry that refers to it, which carries the manifest's digest. The manifest is then a function of what it describes, and the ledger supplies the fact that the description was made at a certain point in the sequence.
+
+\golisting{internal/manifest/manifest.go}{The manifest of an experiment.}{lst:manifest}
+
+\section{Build Information}
+
+The toolchain embeds facts about a build in the binary, and the function \texttt{debug.\allowbreak ReadBuildInfo} reads them back. The record includes the version of the toolchain, the path of the main module, and a list of key and value pairs for the settings of the build: the compiler, the target operating system and architecture, whether the C compiler was enabled, the level of the target instruction set, and, when the source is in a version-control repository, the revision and whether the working tree had uncommitted changes. The manifest copies these into its own fields.
+
+\lstinputlisting[style=shellstyle,caption={Writing a manifest, checking it, and checking it after the inputs change.},label={lst:session15}]{session15.txt}
+
+The transcript in Listing~\ref{lst:session15} writes the manifest of a directory of two files, prints it, and checks it. The check recomputes the manifest from the present state and prints the differences, and an unchanged state gives the message that the manifest matches. After one file is overwritten and another added, the check names exactly those two inputs and exits with a failure status. The ledger gained one entry, the action \texttt{manifest} with the digest, and the check wrote nothing.
+
+Two entries of the printed manifest are worth a closer look. The first is that the build was made with the C compiler enabled. The second is a long setting called \texttt{DefaultGODEBUG} that lists compatibility switches. The list is there because the module file declares an older version of the language than the toolchain implements, and the toolchain then makes some of its newer behaviours revert to the old ones. One entry of the list, \texttt{httpmuxgo121=1}, makes the standard library's request multiplexer ignore the pattern syntax that later versions added to it. The service does not use that multiplexer, since its routing table is the one of Chapter~\ref{ch:adjudication}, so the entry changes nothing for the code of this book. A service built on the standard multiplexer under the same module file would route differently from what the version of its toolchain suggests, and the manifest is where that would be found.
+
+\section{Comparing Two Builds}
+
+\lstinputlisting[style=shellstyle,caption={The static binary of Chapter~\ref{ch:containers} checked against the manifest of the ordinary build.},label={lst:session16}]{session16.txt}
+
+The binary of the container image was built with the C compiler disabled and with the option that removes file-system paths from the executable. Checked against the manifest made by the ordinary build, it reports the differences in Listing~\ref{lst:session16}: the added option, the changed value for the C compiler, and the removal of the settings for the C toolchain's flags, which a build without the C compiler does not record. The two builds were meant to differ and the manifest says how.
+
+The same listing shows a limit. The container build also passed an option to the linker that strips symbol tables, and that option does not appear in the differences. In this toolchain version the settings embedded in the binary do not include it, so a binary built with it and one built without it have equal manifests. A manifest identifies a build only up to what the toolchain chooses to record, and the missing option is a case where two different binaries are indistinguishable by their manifests. The first exercise closes that gap with the digest of the executable itself.
+
+A second limit concerns the source. When the source is not under version control, as it is not in the directory where these transcripts were produced, the settings contain no revision, and two different source trees compiled with the same toolchain and flags yield the same manifest. The record of the revision is only as good as the habit of building from a clean checkout, and when the tree is not clean, the setting that says so is the one a careful reader looks for.
+
+\section{What the Manifest Does Not Establish}
+
+A manifest says what an experiment started from. It does not say that the experiment, run again from the same start, would give the same result. That is a property of the program, and it holds or fails for reasons the manifest cannot see: use of the clock, the order in which goroutines finish, the iteration order of a map, and the contents of the environment all affect the outcome of programs, and a manifest records none of them. The experiment of the next chapter has been arranged so that the property can be checked, since it is built from nothing that varies, and its tests include running the search twice and comparing. A benchmark does not have the property, and its manifest would fix the inputs and leave the numbers free to differ by the noise of the machine.
+
+The manifest also does not establish that the inputs are the right ones. It records which files were used, by digest, and a digest is the identity of content, as Chapter~\ref{ch:traversal} said, and not a statement that the content is correct. An experiment run on the wrong files has a perfectly good manifest.
+
+\section*{Exercises}
+
+\begin{exercise}
+Add the SHA-256 digest of the running executable to the manifest, found through \gocode{os.Executable}. Show that two builds that differ only in the stripping option now have different manifests, and say what the change does to the property that moving the program does not change the manifest.
+\end{exercise}
+
+\begin{exercise}
+Build the program inside a version-control checkout and again after modifying a file without committing it. Report the settings that differ and explain how a reader of two manifests could tell the builds apart.
+\end{exercise}
+
+\begin{exercise}
+Make the check command ignore the settings and compare only the inputs and parameters. Describe a result that this would let through that the full check catches.
+\end{exercise}
+
+\begin{exercise}
+Write the manifest of the benchmark run of Chapter~\ref{ch:measurement}, including the machine description from the benchmark header as parameters. Run the benchmark twice and compare the manifests and the results, and state what the manifests establish about the difference between the results.
+\end{exercise}

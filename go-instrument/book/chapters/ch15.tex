@@ -1,0 +1,50 @@
+\chapter{Reconstruction and Its Limits}
+\label{ch:reconstruction}
+
+\section{Two Commands}
+
+Two commands put the index to use. The command \gocode{index} obtains an index that agrees with the ledger, by loading, catching up, or rebuilding as \gocode{Open} decides, writes it to disk with the atomic replacement of Chapter~\ref{ch:encoding}, and reports which of the three happened and why. The command \gocode{status} answers the question that motivated the index, which is whether the files in a directory still match what the ledger last recorded about them. It hashes every file under the directory with the pool of Part~III, looks each path up in the index, and prints one line per path with a state. A path is \emph{unchanged} when its current digest equals the last recorded digest and the latest attempt succeeded. It is \emph{changed} when the digests differ, \emph{new} when the ledger has never mentioned it, \emph{missing} when the ledger mentions it under the directory and no file is there now, and \emph{unreadable} when it could not be hashed. Two further states, \emph{never-verified} and \emph{last-attempt-failed}, report paths whose history in the ledger contains only failures or ends in one. The command exits with a failure status when any path is not unchanged, so that a script can use it as a check, and it writes nothing at all: not to the ledger, not to the index.
+
+\section{A Recorded Session}
+
+The session below uses a directory of three small files. The first command verifies them with one worker and with the \gocode{-each} flag, so that the ledger receives a record for each file in a deterministic order. The rest of the session builds the index, destroys it, builds it again, and then disturbs the files and the ledger in turn.
+
+\lstinputlisting[style=shellstyle,caption={Building, destroying, and rebuilding the index, and the states reported by \gocode{status}.},label={lst:session6}]{session6.txt}
+
+The transcript carries the argument of Part~IV in a few observations. The first build says that it rebuilt the index because no index file existed, and that it covers three paths from four ledger records, the three file records and the aggregate. The listing of the start of the file shows the version, the count of records, the head digest, and the first entry, in an encoding whose layout is fixed by the declaration of the types. The checksum of the file is printed, the file is deleted, the command is run again, and the checksum is the same. That is Proposition~\ref{prop:rebuild} observed on one ledger: the file was a function of the ledger, and a function recomputes to the same value.
+
+The session then changes the world. The file \texttt{b.txt} is overwritten, a new file \texttt{d.txt} is created, and \texttt{c.txt} is removed, and \gocode{status} reports a changed, a new, and a missing path, with the other still unchanged and an exit status of 1. The report says nothing about why the content of \texttt{b.txt} changed or whether the change was legitimate. It says that the bytes on disk no longer match the digest the ledger holds, which is a statement about a difference and not about its cause.
+
+After the files are verified again, the ledger gains four more records, and the command \gocode{index} reports that it caught up, with four paths from eight records, so that the existing file was extended and not rebuilt. A new \gocode{status} shows \texttt{b.txt} and \texttt{d.txt} as unchanged and \texttt{c.txt} still as missing, and the last of these is correct and worth noticing. The ledger is a history, and it records that \texttt{c.txt} was once verified. Deleting the file does not delete the fact that it was verified, and the index, being derived from the ledger, keeps reporting the path until someone records otherwise. A tool that wanted removals to clear the entry would need a ledger action for removal, which is a design decision about the ledger and not a detail of the index.
+
+The last two commands follow the alteration of one letter in the second line of the ledger. Both \gocode{status} and \gocode{index} stop with the same error, naming record 2 and the broken chain, and neither produces output from the damaged ledger. The index file that existed on disk was not consulted in a way that could have hidden the damage, because \gocode{Open} checks the chain before it trusts anything.
+
+\section{What Was Not Shown}
+
+Two properties of the design were checked separately and are reported here without a transcript. The output of \gocode{status} is the same whether or not the index file exists. In a directory prepared like the one above, running the command with the file present, deleting the file, and running it again produced identical output, which is what the rule that no decision depends on the index predicts. The second property is the safety of concurrent writers. Thirty simultaneous runs of \gocode{index} against one ledger left a single index file with the same checksum as a single run, and no temporary files behind. The result is the one the rename argument gives. Each process writes its own temporary file and renames it over the destination, every one of the files is a correct index of the same ledger, and so whichever rename lands last, the destination is correct. The contrast with the ledger of Chapter~\ref{ch:writer} is instructive. The ledger is a sequence, each record depends on the one before, and two writers disagree about what comes next. The index is a function of the ledger, any two writers compute the same value, and a collision between them costs nothing. Derived data is cheap to make safe for concurrency because it has no history of its own to protect.
+
+\section{Limits of the Analogy}
+
+The part is named for memory and reconstruction, and the name needs a statement of what it claims. The engineering discipline is plain: keep one authoritative record, derive everything else from it, and be able to delete the derived forms without loss. The word \emph{reconstruction} is used for that discipline and for nothing more. Nothing in this chapter suggests that an index resembles a memory in how it is formed, how it fails, or what it is for. A human memory is not a function of a log, and it changes when it is used. A cache is exactly a function of a log and does not change. The two share one property, that each is rebuilt from something other than itself, and the book makes no further use of the comparison.
+
+The engineering limits are several. Rebuilding costs time proportional to the ledger, so an index is a saving only when it is loaded and extended more often than it is rebuilt. The derived data is only as good as the authoritative record, and the ledger records what the program was told and what it did, not what is true of the files in the world, as the persistent \emph{missing} entry shows. The index is trusted to the degree that its file has not been edited, which Chapter~\ref{ch:index} identified as an unchecked risk with a bounded effect. And the chain beneath everything is tamper-evident only relative to an external copy of its head, a limit that Chapter~\ref{ch:ledger} stated and that nothing in Part~IV removes.
+
+Part~IV leaves the tool with a durable ledger, a derived index, and a safe way to replace a file. All of it runs inside one machine and is operated by one person at a command line. Part~V removes that restriction by making the tool a service that other programs can reach over a network, and the first thing the service will need is what the ledger could not have for itself in Part~III: a single owner for the one resource that must be sequenced.
+
+\section*{Exercises}
+
+\begin{exercise}
+Add a ledger action that records the removal of a path, have \gocode{status} report a removal as a distinct state, and update \gocode{Apply} so that an entry is cleared by a removal record. Decide whether the index should drop the entry or keep it marked as removed, and justify the choice in terms of the proposition on reconstruction.
+\end{exercise}
+
+\begin{exercise}
+Write a test that deletes the index file between two runs of the \gocode{status} logic, in process, and checks that the lines produced are identical. Then write a deliberately wrong version of \gocode{Open} that trusts a stale index, and show that the test fails.
+\end{exercise}
+
+\begin{exercise}
+Run thirty copies of \gocode{golab index} at once on a ledger that is simultaneously receiving new records from \gocode{verify}. Report whether any index file ever fails \gocode{Open}, and explain why the answer does not contradict the single-ledger fork of Chapter~\ref{ch:writer}.
+\end{exercise}
+
+\begin{exercise}
+Measure the time taken by \gocode{index -rebuild} for ledgers of one thousand, ten thousand, and one hundred thousand records, and plot the results. State at what size the saving from loading an existing index exceeds the cost of writing it.
+\end{exercise}

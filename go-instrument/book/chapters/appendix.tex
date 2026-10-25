@@ -1,0 +1,57 @@
+\chapter{Complete Source of the Command}
+\label{app:main}
+
+The command-line entry point is reproduced in full. Everything else in the \golab{} module appears in the body of the chapters.
+
+\golisting{cmd/golab/main.go}{The \gocode{golab} command.}{lst:main}
+
+\chapter{Building and Running}
+\label{app:build}
+
+The module requires a Go toolchain and no other dependency. From the directory that contains \texttt{go.mod}, the command \gocode{go test ./...} builds every package and runs every test, the command \gocode{go vet ./...} applies the standard static checks, and the command \gocode{go build -o golab ./cmd/golab} produces the executable used in the transcript of Chapter~\ref{ch:ledger}. The programs of Chapter~\ref{ch:transition} live under \texttt{examples} and are each run with \gocode{go run} followed by the path of the example directory. The service is started with \gocode{golab serve}, which reads its tokens from the environment variable \texttt{GOLAB\_TOKENS}. The script \texttt{deploy/build.sh} builds the static binary and, where a container runtime is available, the image of Chapter~\ref{ch:containers}. The commands \gocode{manifest} and \gocode{experiment compress} of Part~VI need no setup; the second takes about fifteen seconds at its default size. The benchmarks of Chapter~\ref{ch:measurement} run with \gocode{go test -run xxx -bench .} from the module root. The tests that exercise subprocesses assume that a POSIX shell named \texttt{sh} is on the path, which is the case on Linux and under the Windows Subsystem for Linux.
+
+\chapter{An Inventory of Guarantees}
+\label{app:guarantees}
+
+The chapters of Parts~I to VI repeatedly distinguish what the Go language or toolchain guarantees from what a library guarantees under assumptions and from what the program merely arranges by convention and checks by tests. Table~\ref{tab:guarantees} collects the distinctions in one place. The table is deliberately conservative. A property is placed in the first column only if a mechanism outside the author's discipline enforces it, and a property that depends on the callers behaving correctly is listed as a convention however carefully it is documented.
+
+\begin{table}[ht]
+\centering
+\small
+\begin{tabular}{@{}p{0.31\textwidth}p{0.17\textwidth}p{0.44\textwidth}@{}}
+\toprule
+Property & Status & Qualification \\
+\midrule
+Code outside \gocode{artifact} cannot build a \gocode{Verified} with an invented digest & Compiler & Visibility of unexported fields. The zero value remains available to every caller. \\
+A zero \gocode{Verified} is not mistaken for evidence & Convention & Callers must test \gocode{IsZero}; nothing forces them to. \\
+External modules cannot import \gocode{internal} packages & Toolchain & Enforced by the \gocode{go} command. \\
+Import cycles do not exist & Compiler & Checked on every build. \\
+A returned error is examined by the caller & Convention & The compiler accepts a discarded error; a static analyser can flag it. \\
+\gocode{Kind} takes only its four declared values & Convention & A conversion from any string compiles. \\
+A policy returns only the five verdicts, never \emph{malformed} or \emph{duplicate} & Compiler & The return type has no such values. Integers outside the range can still be converted to \gocode{Verdict}, and are refused at run time. \\
+\gocode{Inscribe} and \gocode{Validate} receive no policy & Compiler & The signatures have no policy parameter. That nothing else influences them is a matter of reading and testing the code. \\
+Adding a policy to \gocode{AllOf} cannot admit more records & Proof and tests & Holds for the code as written, including the fail-closed clause. \\
+A change to an earlier ledger record is detected & Library under assumptions & Requires a collision-resistant hash. Rewriting the last record, truncating the file, or rewriting the whole chain is not detected without an externally held head digest. \\
+A file is unchanged between discovery and verification & Not guaranteed & The size check detects some changes only. \\
+Concurrent goroutines in one process cannot fork the ledger & Proof and tests & Requires that one \gocode{Writer} is the only appender to the file. Two processes can still fork the chain, as the experiment of Chapter~\ref{ch:writer} shows. \\
+The pool returns one outcome per file, in input order & Proof and tests & Cancellation stops new work only; a verification in progress is not interrupted. \\
+The code is free of data races & Detector and argument & The race detector sees only the executions that were run. \\
+A reader of a replaced file sees the whole old or whole new contents & Operating system, with tests & Relies on rename within one filesystem. A crash can leave a stray temporary file, and durability of the rename depends on the directory flush. \\
+A record that was written can be read back & Convention, with a check & \gocode{Append} refuses records above \gocode{MaxLine}; the limit is not enforced by the type system. \\
+Rebuilding the index gives the same bytes as updating it & Proof and tests & Holds while \gocode{Apply} stays free of clocks, files, and map iteration order. \\
+The index file has not been edited & Not guaranteed & Only its position in the ledger is checked; entries are trusted. Decisions never depend on it alone. \\
+Routing depends only on the method and the path & Compiler, with reading & \gocode{Match} takes only those two strings. That nothing else enters its decision is read from thirty lines. \\
+A handler runs only for a caller that \gocode{Permit} allowed & Proof and tests & Local to the package: it holds while \gocode{ServeHTTP} is the only way in. An undeclared requirement is refused. \\
+The ledger has a single writer when the service is used & Convention & Holds inside one process, and only if no command-line process or second container appends to the same file. \\
+A bearer token is confidential in transit & Not guaranteed & The service speaks plain HTTP and must be placed behind transport encryption or on a loopback interface. \\
+A container decides what the service may do & Not guaranteed & It limits what the process can see and consume. Permission is decided by the adjudication in the program. \\
+A failed append leaves no fragment in the ledger & Tests, with a real full-disk run & Holds when the truncation succeeds. A crash between the write and the cut leaves a torn final line, which the next load reports. \\
+An error from \gocode{Append} means the record is absent & Not guaranteed & After a failed flush the record may be present. Callers that retry can record twice. \\
+No credential reaches the log, and no file path reaches a client & Tests & The log fields are chosen one by one; a new field must be reviewed. \\
+Two runs with equal manifests used the same build & Not guaranteed & The manifest holds what the toolchain records. Options such as symbol stripping, and unmodified source outside version control, are not distinguished. \\
+A summary that replaces the ledger answers the decisions of the future & Not guaranteed & Shown false by exact counterexamples for the per-path index. A summary kept beside the ledger can always be recomputed. \\
+\bottomrule
+\end{tabular}
+\caption{What is guaranteed by what, as of the end of Part~VI.}
+\label{tab:guarantees}
+\end{table}

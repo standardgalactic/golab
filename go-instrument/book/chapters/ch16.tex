@@ -1,0 +1,50 @@
+\chapter{HTTP Servers and Handlers}
+\label{ch:http}
+
+\section{From a Command to a Service}
+
+Through Part~IV the tool was something a person ran, which started, did its work, recorded the result, and exited. A service is the same logic with a different lifetime and a different set of callers. It starts once, waits, and handles requests from other programs for as long as it is left running. Two things follow from that change and both reach back to earlier parts of the book. The first is that requests arrive concurrently, so every shared resource needs the discipline of Part~III. The second is that the callers are not the author, so everything that arrives is input from outside, and the checks that were conveniences in a command become the boundary of the system.
+
+The standard library's \gocode{net/http} package supplies the server, and its design repays attention because it is built from the same ideas as the rest of the book. The central abstraction is the interface \gocode{http.Handler}, which has a single method, \gocode{ServeHTTP}, taking a response writer and a request. A handler is anything that can answer a request. The package also defines \gocode{http.HandlerFunc}, a function type with a \gocode{ServeHTTP} method that calls the function, so that any function of the right shape can be used as a handler. That is exactly the adapter pattern of \gocode{PolicyFunc} in Chapter~\ref{ch:interfaces}, and the standard library uses it for the same reason. The service of this chapter is a single value, a \gocode{Server}, that implements \gocode{http.Handler}, and its routing table is a list of \gocode{HandlerFunc} values built from its own methods.
+
+\golisting{internal/service/service.go}{The service: routing table, adjudication, and handlers.}{lst:service}
+
+\section{Reading and Writing a Request}
+
+A handler receives a \gocode{ResponseWriter} and a pointer to a \gocode{Request}, and the rules for each are strict in ways that the types do not enforce. The status line and the headers must be set before the first byte of the body is written. Calling \gocode{WriteHeader} sets the status, and writing the body without having called it sends a status of 200, so a handler that discovers an error after it has begun to write cannot change the status any more. The helper \gocode{writeJSON} in the listing therefore sets the content type, sends the status, and only then encodes the body, and it ignores the error from the encoder because nothing useful can be done once the status is committed.
+
+The body of a request is a stream and not a value, and it comes from a client that may be slow, hostile, or simply mistaken about how much it is sending. A handler that decodes the whole body into memory without a limit lets any client exhaust the memory of the process by sending a large one. The function \gocode{http.MaxBytesReader} wraps the body in a reader that fails once a limit is passed, and the admission handler sets the limit at one mebibyte. When the limit is passed the decoder's error is an \gocode{*http.MaxBytesError}, which the handler recognizes with \gocode{errors.As}, the technique of Chapter~\ref{ch:errors}, and answers with status 413 instead of reporting a generic failure. The decoder is also told to refuse unknown fields, which is the strict choice weighed in the last exercise of Chapter~\ref{ch:encoding}. A client that misspells a field name is told so, and does not have its record accepted with the field silently dropped.
+
+\section{One Goroutine per Request}
+
+The server starts a goroutine for every connection and calls the handler in it. This is the model that makes Go servers simple to write, and it is the reason the concurrency of Part~III is not optional here. Two requests can be inside \gocode{admit} at the same moment, and both will want to append to the ledger. The \gocode{Server} holds a \gocode{ledger.Writer}, so both appends go through the channel to the single goroutine that owns the file. The test \gocode{TestConcurrentClientsShareOneLedgerSafely} sends forty simultaneous writes while ten other clients read, and checks afterward that the ledger holds exactly forty records and that its chain verifies. It was run under the race detector.
+
+The readers raise a point that Part~III did not need. The handlers for the head of the ledger, for a listing of records, and for an index lookup all need the contents of the ledger. If a handler called \gocode{ledger.Load} directly, it would read the file while the owning goroutine might be in the middle of writing a line, and could see a partial record, which would fail to decode. The \gocode{Writer} therefore has a method, \gocode{Snapshot}, that sends a request of a different kind through the same channel. The owning goroutine handles it between appends, loads the file, and replies with the records. A reader sees the ledger as it stood between two appends, and never a half-written line. The test \gocode{TestSnapshotSeesCompletedAppendsAndNeverATornRecord} runs eight appenders and a repeated reader at once, verifies the chain of every snapshot, and checks that no snapshot is shorter than an earlier one. The cost is that every read loads the whole file and queues behind pending appends, which is acceptable for a teaching service and would be the first thing to change in a busy one. The protection extends only to readers inside this process. A command-line program that reads the file at the same moment has no such guarantee, which is a case of the single-process limit that Chapter~\ref{ch:writer} stated and that Chapter~\ref{ch:containers} returns to.
+
+\section{Timeouts and Shutdown}
+
+A server that waits forever for a client is a server that a few slow clients can stop. The \gocode{http.Server} type has timeouts for reading the request headers, for reading the whole request, for writing the response, and for idle connections, and all of them default to no limit. The command sets each of them. Without them, a client that opens connections and sends nothing holds a goroutine and a socket per connection indefinitely, and the process eventually runs out of one or the other.
+
+Stopping a service has the same structure as stopping the pool of Chapter~\ref{ch:contexts}, with requests in place of files. The command listens for the interrupt and terminate signals through \gocode{signal.NotifyContext}, which returns a context that is cancelled when one arrives. When the context ends, the command calls \gocode{Shutdown} on the server with a deadline. The method closes the listeners so that no new connections are accepted, waits for the requests in progress to finish, and returns once they have or the deadline passes. Only then does the command close the ledger writer, and the order is essential. A writer closed first would make every request still in flight fail with \gocode{ErrClosed} on its append, after the client had been told nothing, whereas a writer closed last has every accepted append written before the process exits. The transcript in Listing~\ref{lst:session7} shows the sequence at the end, with the messages \texttt{shutting down} and \texttt{stopped} and a clean exit status.
+
+\section{Testing Without a Network}
+
+The package \gocode{net/http/httptest} supplies what is needed to test a handler without a real network. \gocode{NewRecorder} gives a response writer that captures what the handler wrote, and \gocode{NewServer} starts a real server on a loopback port and returns its address. The tests of this chapter use the second form, because they want the whole path, including the router, the adjudication, and the concurrency of real connections. They are collected in the next chapter, which is concerned with what they establish.
+
+\section*{Exercises}
+
+\begin{exercise}
+Write a middleware function, one that takes an \gocode{http.Handler} and returns another, that records the status code and duration of every request, using a wrapper around the \gocode{ResponseWriter} that captures the status. Explain why the wrapper must forward \gocode{WriteHeader} and why a handler that never calls it needs a default.
+\end{exercise}
+
+\begin{exercise}
+Remove the \gocode{ReadHeaderTimeout} from the server and write a program that opens many connections and sends only a few bytes on each. Report what happens to the number of goroutines in the server, and restore the timeout.
+\end{exercise}
+
+\begin{exercise}
+Change the order of shutdown so that the writer is closed before the server. Start a client that posts continuously, stop the server with a signal, and report what the client observes.
+\end{exercise}
+
+\begin{exercise}
+Replace the full-file read in \gocode{Snapshot} with a request that returns only the records after a given sequence number, and have the listing handler use it. State what the writer must now assume about the part of the file it does not read.
+\end{exercise}

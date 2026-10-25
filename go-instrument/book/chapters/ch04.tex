@@ -1,0 +1,50 @@
+\chapter{Errors as Values}
+\label{ch:errors}
+
+\section{The Error Interface}
+
+In many languages a failure interrupts the normal flow of control and travels up the call stack until some enclosing handler catches it. Go makes a different bet. A failure is an ordinary value of the built-in interface type \gocode{error}, whose entire definition is a single method that returns a string, and a function that can fail returns such a value alongside its result. The caller receives the value at the point of the call and must decide, in plain sight, what to do with it. The cost of the arrangement is verbosity, since the test \gocode{if err != nil} appears with a frequency that new readers find tiresome. The benefit is that every place where a failure can occur is visible in the text of the program, and every place where one is ignored is visible as well.
+
+The previous chapters used two constructors for errors. The function \gocode{errors.New} produces an error with a fixed message, and the function \gocode{fmt.Errorf} produces one whose message is formatted from its arguments. A third feature of \gocode{fmt.Errorf} is the one that matters most for the design of \golab{}: the verb \gocode{\%w} wraps another error, so that the new error carries both the added context and the original. In the artifact package, a failure to open a file is reported as an error whose text is of the form \gocode{verify path: open path: no such file or directory}. The outer message says what \golab{} was attempting and the inner one says what the operating system refused, and both are present in the one value.
+
+\section{Sentinel Errors and Inspection}
+
+Wrapping would be of little use if the only way to examine a wrapped error were to search its text. The standard library provides two functions for inspecting the chain. The function \gocode{errors.Is} asks whether any error in the chain is equal to a given target value, and it is the usual way to test for a sentinel, which is a package-level error variable that names a condition. The transition package declares two of them, \gocode{ErrNegative} and \gocode{ErrOverflow}, and the ledger package declares \gocode{ErrBroken}. A caller that wishes to treat an overflow differently from a negative result can write \gocode{errors.Is(err, transition.ErrOverflow)}, and the test succeeds even though the error that \gocode{Add} returns has been wrapped with the numbers involved.
+
+The second function, \gocode{errors.As}, asks whether any error in the chain has a given type and, if so, assigns it to a variable of that type so that its fields can be read. The test \gocode{TestVerifyMissingFileKeepsItsCause}, in Listing~\ref{lst:scan-test}, uses both. It verifies a file that does not exist and then checks that \gocode{errors.Is(err, fs.ErrNotExist)} holds, which shows that the underlying cause survived the wrapping performed by \gocode{Verify}, and that \gocode{errors.As} can recover the \gocode{*fs.PathError} produced by the operating-system layer, whose \gocode{Op} field is \gocode{"open"}. The point of the test is to protect a property that would otherwise erode unnoticed. A later change that formatted an error with \gocode{\%v} in place of \gocode{\%w} would leave every message looking the same to a human reader while severing the chain, and the callers that depend on \gocode{errors.Is} would begin failing to recognize conditions they had previously recognized.
+
+A sentinel is part of the public interface of the package that declares it, in the same way that a function is, and it should be introduced with the same care. Once callers test for \gocode{ErrBroken}, the package has committed to returning it, wrapped or not, in the circumstances that the documentation describes. The sentinels in \golab{} are few and each names a distinct refusal: a transition that would leave the permitted interval on the low side, one that would leave it on the high side, and a ledger whose chain of digests does not hold.
+
+\section{Context and the Cost of Silence}
+
+Error values are most useful when they carry enough context to be acted upon and least useful when they say only that something failed. The functions of \golab{} follow a convention that each layer prefixes the error it returns with the operation it was performing and the object of the operation, so that by the time an error reaches the command it reads as a short narrative. The text \gocode{golab: record 1 digest mismatch: ledger chain broken} shows the pattern. The ledger names the record, the failed check, and the sentinel, and the command adds its own name. A convention of this kind has the property that no layer needs to know the details of another. The artifact package does not know that its errors will be printed by a command, and the command does not know the structure of the errors it prints.
+
+The opposite habit, returning the inner error unmodified, loses the narrative, and the habit of discarding it altogether is worse. The blank identifier \gocode{\_} lets a caller accept a result and ignore the error that accompanied it, and the compiler permits the practice. Static analysers can warn about it, and a project that cares about its failure modes will enable them, but the language places no obstacle in the way. The consequence is that Go provides a convention for handling errors and not a mechanism that forces it. The distinction between reporting a failure and enforcing the boundary the failure was supposed to protect, raised in the fourth exercise of Chapter~\ref{ch:transition}, has its practical form here: a function that returns \gocode{ErrNegative} reports that a transition was refused, and the refusal has an effect on the system only if the caller refrains from using the state it would have produced.
+
+\section{Partial Failure as Data}
+
+Operations that act on many files raise a question that single operations do not, namely what to do when some succeed and some fail. The \gocode{verify} command of \golab{} makes a choice that is worth examining, because it is the choice of a tool that is meant to keep records. It attempts every file, collects the failures instead of stopping at the first, and then appends one record to the ledger that states how many files were found, how many were verified, and how many failed. The record is an aggregate: it holds three counts and does not list the individual files or their outcomes. Per-file results are printed to the terminal and are not stored in the ledger, a limitation that Part~III removes with an optional flag. Only after the record has been written does it return an error if any file failed. The order matters. A command that returned at the first failure would leave the ledger without any record that the attempt had been made, and a command that reported success after any failure would make the record misleading. The chosen order ensures that the ledger always contains an account of what was tried and what happened, and that the exit status of the program tells the operator that the account contains failures.
+
+The behaviour is a small instance of a general principle for systems that must be audited. Failure is information, and a system that records only its successes gives an auditor a distorted picture of what it does. The commands of \golab{} are therefore built so that refusals, failures, and timeouts are written to the ledger in the same form as successes, and the program's exit status is a separate matter, reserved for communicating with the shell.
+
+\section{Errors and Panics}
+
+Go also has a mechanism for conditions that the program cannot reasonably continue from. The built-in function \gocode{panic} stops the ordinary flow of control, runs any deferred calls, and terminates the program with a stack trace unless a deferred function recovers. The runtime raises a panic for errors such as indexing past the end of a slice or dereferencing a nil pointer. The convention of the language is to reserve panics for programmer error and for impossible states, and to use returned errors for anything that can happen in a correctly written program running in an imperfect world, which includes missing files, malformed input, and refused permissions. No code in Part~I calls \gocode{panic}, and the \gocode{main} function of \golab{} does not recover from one. A panic in a tool of this kind is a bug to be fixed, and hiding it would obscure the very evidence that is needed to fix it.
+
+\section*{Exercises}
+
+\begin{exercise}
+Change the \gocode{\%w} in the \gocode{Verify} function to \gocode{\%v} and run the test suite. Identify which test fails and explain what property it was protecting.
+\end{exercise}
+
+\begin{exercise}
+Define a typed error in the transition package that carries the attempted amount and the current counter, and arrange for \gocode{Add} to return it wrapping the appropriate sentinel. Show that a caller can recover both the sentinel and the numbers. Discuss when a sentinel is preferable to a typed error and when it is not.
+\end{exercise}
+
+\begin{exercise}
+The \gocode{verify} command appends its record to the ledger before returning an error for failed files. Describe a failure of the ledger itself that would defeat this ordering, and propose a policy for the command to follow in that case.
+\end{exercise}
+
+\begin{exercise}
+Install a static analyser that reports discarded errors, run it against the module, and report what it finds. Then deliberately introduce a discarded error and observe the report. Explain why the analyser is a better description of a policy than of a language feature.
+\end{exercise}

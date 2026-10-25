@@ -1,0 +1,156 @@
+.
+├── How_Go_Architecture_Enforces_System_Truth.json
+├── How_Go_Architecture_Enforces_System_Truth.mp3
+├── How_Go_Architecture_Enforces_System_Truth.srt
+├── How_Go_Architecture_Enforces_System_Truth.tsv
+├── How_Go_Architecture_Enforces_System_Truth.txt
+├── How_Go_Architecture_Enforces_System_Truth.vtt
+├── file-list.txt
+├── go-instrument
+│   ├── README.md
+│   ├── book
+│   │   ├── chapters
+│   │   │   ├── appendix.aux
+│   │   │   ├── appendix.tex
+│   │   │   ├── ch01.aux
+│   │   │   ├── ch01.tex
+│   │   │   ├── ch02.aux
+│   │   │   ├── ch02.tex
+│   │   │   ├── ch03.aux
+│   │   │   ├── ch03.tex
+│   │   │   ├── ch04.aux
+│   │   │   ├── ch04.tex
+│   │   │   ├── ch05.aux
+│   │   │   ├── ch05.tex
+│   │   │   ├── ch06.aux
+│   │   │   ├── ch06.tex
+│   │   │   ├── ch07.aux
+│   │   │   ├── ch07.tex
+│   │   │   ├── ch08.aux
+│   │   │   ├── ch08.tex
+│   │   │   ├── ch09.aux
+│   │   │   ├── ch09.tex
+│   │   │   ├── ch10.aux
+│   │   │   ├── ch10.tex
+│   │   │   ├── ch11.aux
+│   │   │   ├── ch11.tex
+│   │   │   ├── ch12.aux
+│   │   │   ├── ch12.tex
+│   │   │   ├── ch13.aux
+│   │   │   ├── ch13.tex
+│   │   │   ├── ch14.aux
+│   │   │   ├── ch14.tex
+│   │   │   ├── ch15.aux
+│   │   │   ├── ch15.tex
+│   │   │   ├── ch16.aux
+│   │   │   ├── ch16.tex
+│   │   │   ├── ch17.aux
+│   │   │   ├── ch17.tex
+│   │   │   ├── ch18.aux
+│   │   │   ├── ch18.tex
+│   │   │   ├── ch19.aux
+│   │   │   ├── ch19.tex
+│   │   │   ├── ch20.aux
+│   │   │   ├── ch20.tex
+│   │   │   ├── ch21.aux
+│   │   │   ├── ch21.tex
+│   │   │   ├── ch22.aux
+│   │   │   ├── ch22.tex
+│   │   │   ├── conclusion.aux
+│   │   │   ├── conclusion.tex
+│   │   │   ├── plans.aux
+│   │   │   ├── plans.tex
+│   │   │   ├── preface.aux
+│   │   │   └── preface.tex
+│   │   ├── main.aux
+│   │   ├── main.fdb_latexmk
+│   │   ├── main.fls
+│   │   ├── main.log
+│   │   ├── main.out
+│   │   ├── main.tex
+│   │   ├── main.toc
+│   │   ├── session.txt
+│   │   ├── session10.txt
+│   │   ├── session11.txt
+│   │   ├── session12.txt
+│   │   ├── session13.txt
+│   │   ├── session14.txt
+│   │   ├── session15.txt
+│   │   ├── session16.txt
+│   │   ├── session2.txt
+│   │   ├── session3.txt
+│   │   ├── session4.txt
+│   │   ├── session5.txt
+│   │   ├── session6.txt
+│   │   ├── session7.txt
+│   │   ├── session8.txt
+│   │   └── session9.txt
+│   └── golab
+│       ├── cmd
+│       │   └── golab
+│       │       └── main.go
+│       ├── deploy
+│       │   ├── Dockerfile
+│       │   └── build.sh
+│       ├── examples
+│       │   ├── ch01_counter
+│       │   │   └── main.go
+│       │   ├── ch01_decrement
+│       │   │   └── main.go
+│       │   ├── ch01_hello
+│       │   │   └── main.go
+│       │   ├── ch01_walk
+│       │   │   └── main.go
+│       │   └── ch10_race
+│       │       └── main.go
+│       ├── go.mod
+│       └── internal
+│           ├── artifact
+│           │   ├── scan.go
+│           │   ├── scan_test.go
+│           │   └── types.go
+│           ├── atomicfile
+│           │   ├── atomicfile.go
+│           │   └── atomicfile_test.go
+│           ├── index
+│           │   ├── bench_test.go
+│           │   ├── index.go
+│           │   └── index_test.go
+│           ├── ledger
+│           │   ├── bench_test.go
+│           │   ├── fault_test.go
+│           │   ├── ledger.go
+│           │   ├── ledger_test.go
+│           │   ├── writer.go
+│           │   └── writer_test.go
+│           ├── manifest
+│           │   ├── manifest.go
+│           │   └── manifest_test.go
+│           ├── pipeline
+│           │   ├── pipeline_test.go
+│           │   ├── policy.go
+│           │   ├── record.go
+│           │   └── stages.go
+│           ├── pool
+│           │   ├── bench_test.go
+│           │   ├── helpers_test.go
+│           │   ├── pool.go
+│           │   └── pool_test.go
+│           ├── runner
+│           │   ├── runner.go
+│           │   └── runner_test.go
+│           ├── service
+│           │   ├── auth.go
+│           │   ├── context.go
+│           │   ├── route.go
+│           │   ├── service.go
+│           │   └── service_test.go
+│           ├── summary
+│           │   ├── summary.go
+│           │   └── summary_test.go
+│           └── transition
+│               ├── transition.go
+│               └── transition_test.go
+└── go-textbook.pdf
+
+26 directories, 128 files

@@ -1,0 +1,76 @@
+\chapter{Goroutines and Channels}
+\label{ch:goroutines}
+
+\section{What a Goroutine Is}
+
+A goroutine is a function running concurrently with the rest of the program. It is started by placing the keyword \gocode{go} before a function call, and the call then proceeds on its own while the caller continues with the next statement. The Go runtime schedules goroutines onto a small number of operating-system threads, so they are cheap enough that a program can hold thousands of them, and a goroutine begins with a stack of only a few kilobytes that grows as needed. The cheapness changes how programs are designed, because the cost that makes a thread-per-task design impractical in many languages is largely absent, and a task that is naturally independent can simply be given a goroutine.
+
+Three properties of goroutines are used throughout Part~III and should be stated at the outset. First, all the goroutines of a process share one address space, which means they can read and write the same variables, and the difficulty of concurrent programming is the difficulty of doing so safely. Second, when the \gocode{main} function returns, the process exits and every other goroutine is abandoned wherever it happened to be, without any chance to finish; a program that wants a goroutine's work must wait for it. Third, a goroutine has no identity visible to the program and no handle by which it can be stopped from outside, so a goroutine ends only when its function returns, and a program that wants to stop one must arrange for the function to notice and return. The second and third properties explain why the tools of this chapter, the wait group and the channel, are about coordination and not about starting work, which is the easy part.
+
+\section{Why \golab{} Needs Them}
+
+Verifying a file means reading its bytes and hashing them. For a handful of small files the work is trivial, and for a research directory holding thousands of large measurements it is the dominant cost of the \gocode{verify} command. The work is also independent from file to file: the digest of one file does not depend on any other, so nothing in the problem requires the files to be handled in sequence. The sequential version leaves most of the machine idle. While one file is being read the processor waits for the disk, and while its bytes are being hashed the disk waits for the processor, and several files in flight at once keep both busy.
+
+The number of files in flight needs a bound, and the bound is a design decision and not an optimization detail. Every open file uses a descriptor, which the operating system limits, a disk serves many simultaneous readers worse than a few, and an unbounded program that started a goroutine per file would try to open every file in a large directory at the same moment. The standard remedy is a pool, a fixed number of worker goroutines that take jobs from a shared source until the source is exhausted. The package \gocode{pool} implements one for \golab{}.
+
+\golisting{internal/pool/pool.go}{A bounded worker pool that verifies files concurrently.}{lst:pool}
+
+\section{Reading the Pool}
+
+The function \gocode{VerifyAll} makes three decisions about structure, each of which is a decision about who may touch what. It allocates the slice of results before any goroutine starts, with one element per input file. It creates an unbuffered channel \gocode{jobs} of integers, which will carry indices into the input. And it starts the workers, each a goroutine running the same closure, which receives indices from the channel until it is closed, processes the file at that index, and writes its outcome into the slot of the results slice with the same index.
+
+A channel is a typed conduit through which goroutines pass values. A send on an unbuffered channel blocks until some other goroutine is ready to receive, and a receive blocks until some other goroutine sends, so the pair of operations is both a transfer of a value and a rendezvous between the two goroutines. The loop \gocode{for i := range jobs} receives repeatedly and ends when the channel has been closed and drained. Closing is the sender's business, and it is a signal to the receivers that no more values will arrive, so \gocode{VerifyAll} closes \gocode{jobs} after sending the last index. The rule that only the sender closes a channel is more than a convention, because sending on a closed channel causes a panic, and a receiver that closed a channel would be exposing every sender to it.
+
+A \gocode{sync.WaitGroup} counts goroutines still running. The function calls \gocode{wg.Add(1)} before starting each worker and each worker calls \gocode{wg.Done()} in a deferred call when it returns, and \gocode{wg.Wait()} blocks until the count returns to zero. Placing the call to \gocode{Add} in the loop that starts the goroutines, and not inside the goroutines themselves, matters: if a goroutine called \gocode{Add} on its own behalf, the count could be zero when \gocode{Wait} was reached simply because the goroutine had not yet run.
+
+The pool avoids two classical hazards by construction. It does not use a lock to protect the results, because no two goroutines ever touch the same element: each index is sent on the channel once and received by exactly one worker, which is therefore the sole writer of that slot. And it does not capture a loop variable in a goroutine closure. Before Go 1.22 a variable declared in a \gocode{for} clause was shared by all iterations, so a goroutine started in the loop that referred to it would see whatever value it held when the goroutine eventually ran. The module declares Go 1.21 and so has the older rule, and the code is written to give the same result under either rule, by sending the index through a channel and not by capturing it.
+
+\section{Why the Caller Can Read the Results}
+
+Writing to a slice from several goroutines and reading it from another raises the question of what the reader is guaranteed to see. The Go memory model answers it with a small set of ordering rules. A send on a channel happens before the corresponding receive completes, the closing of a channel happens before a receive that returns because the channel is closed, and a call to \gocode{Done} on a wait group happens before a \gocode{Wait} that it releases returns. An operation that happens before another is guaranteed to be visible to it, and two accesses to the same memory with no such ordering between them, at least one of which is a write, constitute a data race, whose effect the language does not define.
+
+\begin{proposition}\label{prop:pool}
+When \gocode{VerifyAll} returns, the result slice has one element per input file, element $i$ is the outcome for file $i$, and the caller's reads of the slice are ordered after every worker's writes to it.
+\end{proposition}
+
+\begin{proof}
+The feeder sends each index $i$ exactly once, so exactly one worker receives it and writes element $i$, and no other goroutine accesses that element while workers are running. Every worker's last action is its deferred \gocode{Done}, and \gocode{VerifyAll} returns only after \gocode{Wait} has returned, so each write to an element happens before \gocode{Done}, which happens before \gocode{Wait} returns, which happens before the caller's reads. Because the feeder sends one index per file and receives block until sent to, every element is written before the function returns.
+\end{proof}
+
+The proposition explains what would go wrong if the call to \gocode{Wait} were removed. The function would return while workers were still writing, and the caller's reads of the slice would have no ordering with those writes, which is a data race even if the program happened to produce the right output on a given run.
+
+\section{A Race, Observed}
+
+The danger is easy to demonstrate and worth seeing once. The program in \texttt{examples/\allowbreak ch10\_\allowbreak race} starts a thousand goroutines, each of which increments a shared counter, and prints the total, which ought to be one thousand.
+
+\golisting{examples/ch10_race/main.go}{A deliberately racy program.}{lst:race}
+
+\lstinputlisting[style=shellstyle,caption={The racy program, run five times and then under the race detector.},label={lst:session3}]{session3.txt}
+
+The five runs in Listing~\ref{lst:session3} give five different answers, and only the first is correct. The statement \gocode{counter++} is three steps, a read, an addition, and a write, and when two goroutines interleave their steps, one of the increments is lost. The result is not wrong in a consistent way that a test could pin down, and a program with this defect can pass a test suite for months. The race detector, enabled with the \gocode{-race} flag, instruments every memory access and reports a pair of accesses that are not ordered by the memory model, naming the line, the goroutines involved, and where they were created. A program in which it reports a race exits with status 66.
+
+The detector is a tool and not a proof, and the book relies on it only in that sense. It reports races that occur in the executions it observes, so a race on a path the tests never exercise is invisible to it, and a program that passes under \gocode{-race} has been shown free of races only on the runs that were made. The tests of Part~III are therefore designed to drive concurrent paths hard, with many goroutines and many iterations, and are run with the detector enabled, and the arguments in the text, like the one above, are what establish that the code is correct for all runs.
+
+\section{Goroutines Are Not Services}
+
+It is tempting to treat a goroutine as a small independent service, a worker that is handed a job and returns a result, and the vocabulary of the pool encourages it. The comparison conceals the differences that matter most. Goroutines share memory and share fate: a panic in one goroutine that is not recovered terminates the entire process, a runaway goroutine slows every other, and a bug that corrupts a shared structure corrupts it for all of them. A service in the sense used in Part~V is a separately deployed program that communicates over a network, and its failure modes are of a different kind. A message can be lost or delivered twice, the remote program can be slow or absent or running an older version, and a request can be processed even though the reply never arrives, so that the sender cannot tell whether the work was done. None of these exists between goroutines, and designs that move from the first to the second without confronting them inherit failures that local concurrency never exposed. The pool of this chapter is a technique for using the processors and disks of one machine, and it makes no claim about distribution.
+
+\golisting{internal/pool/pool_test.go}{Tests for the worker pool.}{lst:pool-test}
+
+\section*{Exercises}
+
+\begin{exercise}
+Remove the call to \gocode{wg.Wait()} from \gocode{VerifyAll} and run the tests under \gocode{-race}. Report what the detector says and explain it in terms of Proposition~\ref{prop:pool}.
+\end{exercise}
+
+\begin{exercise}
+The test \gocode{TestWorkersReallyRunInParallel} does not measure time. Explain how it proves that the workers run simultaneously, and why a test that compared elapsed times would be less reliable.
+\end{exercise}
+
+\begin{exercise}
+Change the pool so that the workers pull file names from a shared slice protected by a mutex instead of receiving indices from a channel. Compare the two designs for clarity and for the guarantees available to the caller.
+\end{exercise}
+
+\begin{exercise}
+Write a program that starts a goroutine which panics and show that the process terminates even though \gocode{main} is waiting normally. Then add a \gocode{recover} in the goroutine and discuss whether recovering is appropriate for a verification worker.
+\end{exercise}

@@ -1,0 +1,66 @@
+\chapter{Encoding, Buffering, and Atomic Replacement}
+\label{ch:encoding}
+
+\section{Data That Outlives a Process}
+
+Everything built so far either finishes within one run of the program or goes into the ledger, which is written once and never rewritten. Part~IV is concerned with a third kind of data, which is written repeatedly, replaced as a whole, and read by later runs of the program or by other programs. A file of this kind raises a set of questions that the ledger avoided by being append-only. How is a structure turned into bytes and back without losing or inventing anything? What happens when the bytes are large? What does a reader see if it opens the file while a writer is part-way through replacing it, and what is left behind if the machine stops in the middle? Go answers the first question with the \gocode{encoding} packages, the second with \gocode{bufio}, and the third with no package at all, only a technique that depends on a property of the operating system, which this chapter states exactly and then tests as far as a test can.
+
+\section{Encoding as a Round Trip}
+
+The ledger already uses \gocode{encoding/json}, and it is worth saying what the package does with a struct, because the later chapters depend on it. The encoder writes the exported fields of a struct in the order of their declaration, uses the name in the field tag when there is one, and omits a field marked \gocode{omitempty} when its value is the zero value. It writes the keys of a map in sorted order. These rules make the encoding of a value a function of the value alone, which is why the digests of Chapter~\ref{ch:ledger} are reproducible. The decoder is more permissive than the encoder. It ignores fields it does not recognize, leaves absent fields at their zero values, and accepts the fields in any order, so a file written by a newer version of a program is read without complaint by an older one, and the fields the older version does not know about are silently dropped when it writes the file again.
+
+That permissiveness is convenient and also a hazard, and the index of the next chapter guards against it with an explicit version number and with checks on the decoded value, for instance that no path appears twice. The general point is that a round trip through an encoding preserves exactly what the struct can express. Information that the struct has no field for does not survive, and the compiler has nothing to say about it. A reader who wants a round trip to be faithful has two honest options, which are to decode into a type that rejects unknown fields by calling \gocode{DisallowUnknownFields} on the decoder, or to state in the documentation that unknown fields are discarded. The index takes the second course, because an index is derived data and a field it fails to preserve can be recomputed.
+
+\section{Buffering and a Limit That Was There All Along}
+
+Reading and writing a file one small piece at a time is slow, because each call to the operating system has a fixed cost. The package \gocode{bufio} wraps a reader or writer in a buffer so that many small operations become few large ones. A \gocode{bufio.Writer} holds its data until the buffer fills or until \gocode{Flush} is called, and the last of these is the one that is easy to forget: bytes written to a buffered writer and not flushed are lost without any error. A \gocode{bufio.Scanner} reads a file in lines, tokens, or words, and the ledger uses it to read one JSON record per line.
+
+The scanner has a limit that the ledger of Part~I did not mention. A scanner holds a line in a buffer of bounded size, and when a line is longer than the limit it stops with the error \gocode{bufio.ErrTooLong}. The ledger sets the limit at one mebibyte, which is far more than any record the program produced in the earlier parts. The limit is nonetheless a property of the reader that the writer did not respect. \gocode{Append} would write a record of any length, and a record longer than the limit could therefore be written successfully and then never read back, and since \gocode{Append} begins by loading the whole ledger, every later append would fail as well. A single oversized detail value, such as a long error message, would disable the ledger permanently.
+
+The repair is small and the lesson is general. The ledger package now declares the limit as an exported constant, \gocode{MaxLine}, sets the scanner's buffer from it, and refuses in \gocode{Append} to write a record whose encoding exceeds it, returning the sentinel \gocode{ErrTooLarge}. The new test appends a record that is too large, checks that the error is the sentinel, and then checks that a normal append still succeeds and that the ledger loads. The principle is that a writer must not produce what its own reader cannot consume. Where the format has a limit, the limit belongs in one place, and the code that writes must check it as well as the code that reads.
+
+\section{Replacing a File Whole}
+
+The ledger can be appended to because each record is independent of the file's other contents. A file that is rewritten as a whole, such as the index, is in a different position. The obvious way to rewrite it is to open the file for writing, which truncates it, and write the new contents. That sequence has a window in which the file is empty or partly written. A reader that opens the file in that window sees a fragment, and a crash in that window leaves a fragment behind permanently, with the old contents already destroyed.
+
+The standard remedy is to write the new contents to a different file and then rename it over the old one. On POSIX filesystems, renaming a file to a name that already exists, within one filesystem, replaces the destination in a single step, so that any process that opens the name sees either the entire old file or the entire new one. The package \gocode{atomicfile} packages the technique.
+
+\golisting{internal/atomicfile/atomicfile.go}{Replacing a file by writing a temporary and renaming it.}{lst:atomicfile}
+
+The function creates the temporary file in the same directory as the destination, because a rename between directories on different filesystems is a copy and has no such guarantee. It hands the caller a buffered writer through a callback, so that the caller can stream a large structure without first building all its bytes in memory, and it flushes the buffer itself, so that the caller cannot forget. It sets the permissions, calls \gocode{Sync} on the file to ask the operating system to write the data to stable storage before the rename, closes the file and checks the error, renames, and finally syncs the directory, because the rename is itself a change to the directory and is durable only once the directory has been flushed.
+
+The cleanup deserves a comment because it uses a feature of the language that is easy to misread. The function has a named result, \gocode{err}, and a deferred function that inspects it. Every failing step assigns to that variable before returning, so the deferred function can tell whether the function is failing and, if so, close the temporary file when it has not been closed and remove it. A deferred function runs after the return value has been set, and with a named result it can read what was set, which is how a single piece of cleanup code covers every early return. The variable \gocode{closed} records that the file was already closed, since closing a file twice reports an error that would mask the real one.
+
+\begin{proposition}\label{prop:atomic}
+Suppose \gocode{Write} returns a non-nil error. Then the file at the destination path has the same contents it had before the call, and no temporary file created by the call remains, except possibly when the error comes from the final synchronization of the directory, in which case the new contents are in place.
+\end{proposition}
+
+\begin{proof}
+The destination is modified only by the call to \gocode{os.Rename}, which comes after every step that can fail except the directory synchronization. If any earlier step fails, the destination has not been touched, and the deferred function removes the temporary file. If the rename itself fails, the destination is unchanged because a rename either takes effect or does not, and the deferred function removes the temporary file. If only the directory synchronization fails, the rename has taken effect, the temporary name no longer exists, and the error reports that the replacement may not survive a crash.
+\end{proof}
+
+The proposition is about the function's behaviour on errors it can observe. It does not cover a crash, since a program that has stopped cannot clean up. A crash before the rename leaves a stray temporary file with a distinctive name and the destination untouched. A crash after the rename but before the directory flush may, on some filesystems, leave the old file in place after the machine restarts. Neither case produces a partial destination file, which is the property the technique exists to provide, and neither can be demonstrated by an ordinary test, because a test that is running has not crashed.
+
+\section{What the Tests Establish}
+
+\golisting{internal/atomicfile/atomicfile_test.go}{Tests for atomic replacement.}{lst:atomicfile-test}
+
+The tests cover what an ordinary test can reach. The first checks that a file is created and then replaced, that the permissions are applied, and that no extra files remain in the directory. The second makes the callback write more bytes than the buffer holds, so that some of them reach the temporary file, and then return an error. It checks that the old contents are intact and that nothing is left over, which tests the first sentence of the proposition at the point where it is most at risk. The third checks that a missing directory is reported as an error. The fourth runs a reader in a loop while the main goroutine replaces a one-mebibyte file forty times, alternating between two contents that consist entirely of one repeated letter, and checks that every read returns one of the two complete contents. The test samples the interleavings of one run on one filesystem and does not prove the property for every filesystem, and the reader of the chapter should treat the rename guarantee as one that the operating system makes and that the test merely fails to contradict.
+
+\section*{Exercises}
+
+\begin{exercise}
+Change the ledger's \gocode{Load} to use a \gocode{json.Decoder} reading directly from the file, and not a scanner, so that no line limit exists. Decide whether the constant \gocode{MaxLine} and the error \gocode{ErrTooLarge} should then be removed, and justify the decision in terms of what a very large record would do to the memory use of \gocode{Append}.
+\end{exercise}
+
+\begin{exercise}
+Remove the call to \gocode{Sync} on the temporary file and describe a failure that the tests of this chapter cannot detect. Explain why the order of the synchronization and the rename matters.
+\end{exercise}
+
+\begin{exercise}
+Make the temporary file in a different directory from the destination, on a different filesystem if one is available, and report what the rename does. State what this implies about the correct location of the temporary file.
+\end{exercise}
+
+\begin{exercise}
+Modify the decoding of the index so that unknown fields are an error, using \gocode{DisallowUnknownFields}. Describe a situation in which this makes an upgrade of the program harder, and a situation in which it catches a real mistake.
+\end{exercise}

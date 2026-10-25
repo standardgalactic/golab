@@ -1,0 +1,68 @@
+\chapter{Shared State and the Single Writer}
+\label{ch:writer}
+
+\section{The Fork That Part I Predicted}
+
+Chapter~\ref{ch:ledger} ended with a warning. The ledger's \gocode{Append} reads the whole file, checks the chain, computes the next record, and writes it, and these steps are not one atomic action. Two processes that run them at about the same time can each read the same last record and each write a successor, so that the chain acquires two records with the same sequence number. The warning can be tested by launching twenty copies of the command at once, each of which runs a trivial program and records the outcome.
+
+\lstinputlisting[style=shellstyle,caption={Twenty processes appending to one ledger.},label={lst:session4}]{session4.txt}
+
+The result in Listing~\ref{lst:session4} is the failure predicted. Of twenty commands, five managed to append, and two of them wrote sequence number four. The audit reports the damage at the fifth record. The remaining fifteen commands exited with an error, because by the time they ran, the ledger already failed its check and \gocode{Append} refuses to extend a broken chain. The behaviour is not an accident of the transcript. The exact numbers depend on timing and would differ on another run, but the shape is general: once two writers collide, the ledger is damaged, the damage is detected, and every later writer is turned away. The design failed closed, and the cost was an unusable ledger.
+
+The defect is a race of the kind the previous chapters studied, with the difference that the shared state is a file and the competing parties are processes and not goroutines. The pool of Chapter~\ref{ch:goroutines} avoided shared writes by giving each slot of the result slice to one goroutine. The ledger cannot be partitioned that way, because every record depends on the one before it, and the whole point of the structure is a single total order. A total order needs exactly one place at which the order is decided.
+
+\section{Two Ways to Serialize}
+
+There are two standard ways to make a shared resource safe for many goroutines. The first is a lock: a \gocode{sync.Mutex} guards the resource, every user acquires it before touching the resource and releases it afterward, and the lock ensures that only one goroutine is inside the guarded section at a time. The second is ownership: a single goroutine is given exclusive responsibility for the resource, and every other goroutine asks it to act by sending a message over a channel. Go programmers summarize the second style with a proverb, that one should share memory by communicating and not communicate by sharing memory. The proverb is a preference and not a rule, and either style can be right. A lock is the simpler tool for protecting a small piece of state with a few operations. Ownership suits a resource that has a lifecycle, an order of operations, and a single point where work should be sequenced, and the ledger has all three.
+
+\section{The Writer}
+
+The type \gocode{ledger.Writer} implements ownership. Its constructor starts one goroutine, the loop, which receives requests from a channel and calls the existing \gocode{Append} function for each, one at a time, so that within the process no two appends ever overlap. Every other goroutine calls the method \gocode{Append} on the writer, which packages the arguments into a request, sends it, and waits for a reply. The listing also contains a method \gocode{Snapshot}, which sends a request of a second kind that asks the loop to read the whole ledger instead of appending to it. It is not needed in this chapter and is explained in Chapter~\ref{ch:http}, where a service has readers that run while appends are in progress.
+
+\golisting{internal/ledger/writer.go}{The single-writer ledger.}{lst:writer}
+
+Several details of Listing~\ref{lst:writer} carry weight. Each request contains its own reply channel with a buffer of one, so the loop can deliver the result without waiting for the caller to be ready, and a caller that has gone away cannot block the loop or leave a goroutine stranded. The detail map is copied before it is queued, for the reason given in Chapter~\ref{ch:interfaces}: a map is a reference, and a caller that reused its map for the next call would otherwise change a request the writer had not yet processed. The timestamp is taken inside the loop, at the moment of writing, and not by the caller, so the times in the ledger never run backward relative to the sequence numbers.
+
+The subtle part is shutdown. A channel can be closed to tell its receivers that no more requests will come, and closing it ends the loop, but sending on a closed channel panics, so closing the channel while another goroutine is about to send would crash the program. The writer prevents this with a read-write lock. Each call to \gocode{Append} holds the read lock while it checks the closed flag and sends its request, and \gocode{Close} takes the write lock to set the flag and close the channel. The write lock waits until all current holders of the read lock have released it, which means all in-flight sends have completed, and the loop is still receiving during that time, so they do complete. Once \gocode{Close} holds the lock and has closed the channel, any later \gocode{Append} sees the flag and returns \gocode{ErrClosed} without sending. The loop drains whatever is already in the channel before it ends, so every request accepted before the close is written.
+
+\begin{proposition}\label{prop:writer}
+Suppose a single \gocode{Writer} is the only code appending to its file. Then every call to \gocode{Writer.Append} that returns a nil error corresponds to exactly one record on disk, the records appear in the order in which the loop received the requests, and the chain of digests remains valid. After \gocode{Close} returns, no further record is written.
+\end{proposition}
+
+\begin{proof}
+The loop is the only goroutine that calls \gocode{ledger.Append} on the file, and it handles one request completely before receiving the next, so appends are sequential and each reads the file as left by the one before. Each is the same function whose correctness for sequential use was established by the tests of Chapter~\ref{ch:ledger}. A request is replied to after its append returns, so success reported to a caller means the record was written. The channel is closed only under the write lock, after which the closed flag prevents any send, and the loop ends only after the channel is drained, so requests accepted before the close are processed and requests after it are refused.
+\end{proof}
+
+The proposition has a hypothesis, and the hypothesis is the limit of the design. The writer protects the file from goroutines in one process. It does nothing about a second process, which has no knowledge of the first writer's goroutine and will read and write the file on its own account. Twenty copies of the command, each with its own writer, would reproduce the failure of Listing~\ref{lst:session4} exactly. Protecting the file against other processes needs a mechanism from the operating system, such as an advisory lock on the file, or an arrangement in which only one process ever writes, and the second of those is the shape that Part~V gives the tool by making a service the sole owner of the ledger and having clients send it requests over a network. The first exercise explores the lock.
+
+\golisting{internal/ledger/writer_test.go}{Tests for the single-writer ledger.}{lst:writer-test}
+
+\section{What the Tests Establish}
+
+The first test starts twenty goroutines that each append ten records through one writer, then checks that all two hundred records are present, that the chain holds, and that every subject appears exactly once, so that no record was lost and none was written twice. The test was run with the race detector enabled. The third test is the one that exercises the shutdown protocol. It starts sixteen goroutines appending twenty records each, calls \gocode{Close} from another goroutine at an arbitrary moment, and checks that the number of appends that reported success equals the number of records on disk and that the chain is valid. Every append is either accepted and written or refused with \gocode{ErrClosed}, and none is lost in between. As with every concurrency test in the book, the test samples some interleavings and does not enumerate them, and the argument that the protocol is correct is the one in Proposition~\ref{prop:writer}.
+
+With a writer in place the command can offer what Chapter~\ref{ch:errors} said it lacked. The flag \gocode{-each} gives the \gocode{OnResult} callback of the pool a function that appends a record for each file as soon as the file's outcome is known. The callbacks run in the worker goroutines, so up to as many appends may be requested at once as there are workers, and the writer serializes them. The transcript in Chapter~\ref{ch:contexts} shows the resulting records, in order of completion and with a valid chain, followed by the aggregate record.
+
+\section{Costs and Where Part III Ends}
+
+The writer is correct and not fast. Each call to the underlying \gocode{Append} reads and checks the entire ledger, so the cost of the $n$th append is proportional to $n$ and the cost of $n$ appends is proportional to $n^2$. For a ledger of a few thousand records the delay is imperceptible, and for a ledger of a million it is prohibitive. A writer that holds the head digest and the next sequence number in memory, and checks the whole chain only when it opens the file, would make each append constant in cost, at the price of trusting its own memory between appends. The trade is a common one in systems that keep an authoritative log, and the third exercise asks for it.
+
+Part~III has given the tool concurrency in three forms, a bounded pool for independent work, a context for cancellation, and a single writer for the one resource that must be sequenced. Each is accompanied by a statement of what it does not do. The pool does not interrupt a running verification, the context bounds the start of work and not its end, and the writer does not protect against other processes. Part~IV turns to data that must outlive a process, and the question there will be which of what \golab{} knows should be stored, and which can always be rebuilt.
+
+\section*{Exercises}
+
+\begin{exercise}
+Add an advisory file lock around the body of \gocode{ledger.Append}, using the facility your operating system provides, and rerun the twenty-process experiment. Report what changes, and identify one situation in which the lock fails to protect the chain, such as a ledger on a network filesystem.
+\end{exercise}
+
+\begin{exercise}
+Replace the single-writer goroutine with a \gocode{sync.Mutex} around \gocode{ledger.Append}, and compare the two designs with respect to shutdown, to the order of records, and to the amount of code. State which you would choose and why.
+\end{exercise}
+
+\begin{exercise}
+Make the writer keep the head digest and the next sequence number in memory, checking the chain on disk only when the writer is created. Show that appending a thousand records is faster, and describe a scenario in which the in-memory state and the file disagree.
+\end{exercise}
+
+\begin{exercise}
+Remove the read lock from \gocode{Writer.Append} and write a test that calls \gocode{Close} while appenders are active, run under the race detector and repeated many times. Describe the failure that appears and relate it to the rule about closing channels.
+\end{exercise}

@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>trailsim</title>
+<style>
+  :root { --bg:#14161a; --panel:#1d2026; --ink:#e6e8eb; --dim:#8b929c; --accent:#e8b84a; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.45 system-ui, sans-serif; }
+  main { max-width: 1100px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 18px; font-weight: 600; margin: 0 0 12px; }
+  .stage { position: relative; width: 100%; background:#0b0c0e; border:1px solid #2b2f37; }
+  canvas { display:block; width:100%; height:auto; image-rendering: pixelated; touch-action:none; cursor: crosshair; }
+  #ants { position:absolute; inset:0; pointer-events:none; }
+  .bar { display:flex; flex-wrap:wrap; gap:10px 18px; align-items:center; background:var(--panel); border:1px solid #2b2f37; padding:10px 12px; margin-top:10px; }
+  .bar label { color:var(--dim); display:flex; gap:6px; align-items:center; }
+  button, select, input { font:inherit; color:var(--ink); background:#262a32; border:1px solid #39404b; padding:4px 10px; }
+  button { cursor:pointer; } button:hover { border-color: var(--accent); }
+  input[type=number] { width: 72px; }
+  .stats { display:flex; flex-wrap:wrap; gap:6px 24px; margin-top:10px; font-variant-numeric: tabular-nums; }
+  .stats b { color: var(--accent); font-weight:600; }
+  .key { color:var(--dim); margin-top:8px; font-size:13px; }
+  .key i { display:inline-block; width:10px; height:10px; margin:0 4px 0 12px; vertical-align:middle; }
+  #status { color:var(--dim); margin-left:auto; }
+</style>
+</head>
+<body>
+<main>
+  <h1>trailsim</h1>
+  <div class="stage" id="stage">
+    <canvas id="field"></canvas>
+    <canvas id="ants"></canvas>
+  </div>
+  <div class="bar">
+    <button id="pause">Pause</button>
+    <label>Speed <input id="speed" type="range" min="1" max="40" value="2"><span id="speedv">2</span></label>
+    <label>Brush
+      <select id="brush"><option value="wall">wall</option><option value="food">food</option><option value="erase">erase</option></select>
+    </label>
+    <label>Size <input id="radius" type="range" min="1" max="12" value="3"></label>
+    <span id="status">connecting</span>
+  </div>
+  <div class="bar">
+    <label>Ants <input id="ants-n" type="number" min="0" max="20000" value="300"></label>
+    <label>Seed <input id="seed" type="number" value="1"></label>
+    <label><input id="trails" type="checkbox" checked> Pheromone trails</label>
+    <button id="reset">Reset</button>
+  </div>
+  <div class="stats" id="stats"></div>
+  <div class="key">
+    <i style="background:#3c78d8"></i>searching trail
+    <i style="background:#e07a3a"></i>food trail
+    <i style="background:#e8d44a"></i>food
+    <i style="background:#6b7280"></i>wall
+    <i style="background:#f2f2f2"></i>ant
+    <i style="background:#ff4d4d"></i>ant carrying food
+  </div>
+</main>
+<script>
+"use strict";
+const field = document.getElementById("field");
+const antsCv = document.getElementById("ants");
+const fctx = field.getContext("2d");
+const actx = antsCv.getContext("2d");
+let W = 0, H = 0, img = null, paused = false, lastFrame = null;
+const SCALE = 6;
+
+function b64(s) {
+  const bin = atob(s), out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+function setup(w, h) {
+  W = w; H = h;
+  field.width = W; field.height = H;
+  antsCv.width = W * SCALE; antsCv.height = H * SCALE;
+  img = fctx.createImageData(W, H);
+}
+
+function draw(f) {
+  if (f.w !== W || f.h !== H) setup(f.w, f.h);
+  const walls = b64(f.walls), food = b64(f.food), home = b64(f.home), trail = b64(f.trail);
+  const d = img.data;
+  for (let i = 0, p = 0; i < W * H; i++, p += 4) {
+    let r = 11, g = 12, b = 14;
+    const hm = home[i] / 255, tr = trail[i] / 255;
+    r += 60 * hm * 0.6 + 224 * tr; g += 120 * hm * 0.6 + 122 * tr; b += 216 * hm * 0.6 + 58 * tr;
+    if (food[i] > 0) { const k = 0.5 + 0.5 * Math.min(1, food[i] / 40); r = 232 * k; g = 212 * k; b = 74 * k; }
+    if (walls[i]) { r = 107; g = 114; b = 128; }
+    d[p] = r > 255 ? 255 : r; d[p + 1] = g > 255 ? 255 : g; d[p + 2] = b > 255 ? 255 : b; d[p + 3] = 255;
+  }
+  fctx.putImageData(img, 0, 0);
+  actx.clearRect(0, 0, antsCv.width, antsCv.height);
+  const a = f.ants;
+  for (let i = 0; i < a.length; i += 3) {
+    actx.fillStyle = a[i + 2] ? "#ff4d4d" : "#f2f2f2";
+    actx.fillRect(a[i] * SCALE - 1, a[i + 1] * SCALE - 1, 3, 3);
+  }
+  const s = f.stats;
+  document.getElementById("stats").innerHTML =
+    `<span>tick <b>${s.tick}</b></span><span>ants <b>${s.ants}</b></span><span>carrying <b>${s.carrying}</b></span>` +
+    `<span>delivered <b>${s.collected}</b></span><span>food on map <b>${s.remaining}</b></span>`;
+  paused = f.paused;
+  document.getElementById("pause").textContent = paused ? "Resume" : "Pause";
+  document.getElementById("speedv").textContent = f.speed;
+}
+
+function post(path, body) {
+  return fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
+    .then(async r => { if (!r.ok) { const e = await r.json().catch(() => ({})); setStatus(e.error || r.statusText); } });
+}
+
+const statusEl = document.getElementById("status");
+function setStatus(t) { statusEl.textContent = t; }
+
+function connect() {
+  const es = new EventSource("/api/stream");
+  es.onopen = () => setStatus("live");
+  es.onmessage = ev => { lastFrame = JSON.parse(ev.data); draw(lastFrame); };
+  es.onerror = () => setStatus("reconnecting");
+}
+
+document.getElementById("pause").onclick = () => post("/api/pause", { paused: !paused });
+document.getElementById("speed").oninput = e => post("/api/speed", { speed: +e.target.value });
+document.getElementById("reset").onclick = () => post("/api/reset", {
+  ants: +document.getElementById("ants-n").value,
+  seed: +document.getElementById("seed").value,
+  trails: document.getElementById("trails").checked,
+}).then(() => setStatus("live"));
+
+let painting = false, lastSent = 0;
+function paintAt(ev) {
+  if (!W) return;
+  const now = performance.now();
+  if (now - lastSent < 30) return;
+  lastSent = now;
+  const rect = field.getBoundingClientRect();
+  const x = Math.floor((ev.clientX - rect.left) / rect.width * W);
+  const y = Math.floor((ev.clientY - rect.top) / rect.height * H);
+  if (x < 0 || y < 0 || x >= W || y >= H) return;
+  post("/api/paint", { kind: document.getElementById("brush").value, x, y, radius: +document.getElementById("radius").value });
+}
+document.getElementById("stage").addEventListener("pointerdown", ev => { painting = true; lastSent = 0; paintAt(ev); });
+window.addEventListener("pointermove", ev => { if (painting) paintAt(ev); });
+window.addEventListener("pointerup", () => { painting = false; });
+
+connect();
+</script>
+</body>
+</html>

@@ -1,0 +1,60 @@
+\chapter{Interfaces and Composition}
+\label{ch:interfaces}
+
+\section{Why Policy Is a Separate Thing}
+
+At the end of Part~I the tool could do things and record that it had done them, but it had no way of saying that a thing should not be done. The only rules in the program were scattered through the code, as the classification of file names, the bounds of the counter, and the refusal to extend a broken ledger. A rule that lives inside the function it governs cannot be varied without editing the function, cannot be shown to an auditor without reading the function, and cannot be combined with other rules except by writing a larger function. The design question of Part~II is how to move rules out of the operations and into values that can be named, passed around, tested on their own, and combined.
+
+Go answers the question with the interface, and the answer is characteristic of the language. An interface in Go is a set of method signatures, and a type satisfies it by having those methods, with no declaration of intent anywhere. The standard library uses this heavily. The hash of Chapter~\ref{ch:traversal} satisfied \gocode{io.Writer} without knowing the interface existed, and the buffers of Chapter~\ref{ch:processes} did the same. The consequence for design is that the consumer of a behaviour defines the interface it needs, in its own package, and any type anywhere that happens to have the right methods can be supplied. The package of this chapter defines the single interface through which every rule of \golab{} is expressed. The interface has one method, named \gocode{Decide}, which takes a record and returns a verdict.
+
+\golisting{internal/pipeline/policy.go}{Verdicts, the policy interface, and combinators.}{lst:policy}
+
+\section{Verdicts as an Ordered Vocabulary}
+
+A policy examines a record and returns a verdict, and the verdict is an integer type whose five constants are declared with the keyword \gocode{iota}. Within a constant declaration, \gocode{iota} starts at zero and increases by one on each line, so \gocode{Allow} is $0$, \gocode{Unscoped} is $1$, and so on up to \gocode{Refuse}, which is $4$. The choice of an integer representation, in place of the string constants used for \gocode{Kind} and for the outcomes of the runner, is deliberate, because verdicts are ordered by severity and the order is used in the combinator below. The order is a fact about the vocabulary and is stated once, in the declaration, by the placement of the constants.
+
+The method \gocode{String} on \gocode{Verdict} makes the values printable by name. The \gocode{fmt} package checks whether a value has a method with that signature, which is the interface \gocode{fmt.Stringer}, and uses it when formatting, so that a verdict in an error message appears as \texttt{refuse} and not as the number four. Again no declaration connects the type to the interface. The unexported method \gocode{disposition} maps each verdict to the disposition that an admitted record will receive, and it ends in a default branch that treats any unrecognized value as a refusal. A system that decides what is permitted should fail closed, meaning that when it meets something outside its vocabulary it denies and does not allow, and the branch is where that principle is applied to a conversion.
+
+The reader will notice that the policy returns a \gocode{Verdict} and not a \gocode{Disposition}, although the two are closely related and the second has seven values to the first's five. The difference is the point of the next chapter. Two of the seven dispositions, duplicate and malformed, are facts about the record that the pipeline determines for itself, and a policy has no business asserting them. By giving the policy a smaller vocabulary, the type system prevents a policy from claiming that a record is a duplicate, and the compiler enforces the restriction because a function that returns \gocode{Verdict} has no way to produce the other two.
+
+\section{Functions with Methods}
+
+Writing a new named type for every rule would be tedious, and Go provides a compact alternative that surprises readers coming from other languages. Any named type can have methods, including a named function type. The declaration of \gocode{PolicyFunc} says that a \gocode{PolicyFunc} is a function from a record to a verdict, and the method \gocode{Decide} on it simply calls the function. The effect is an adapter: any function with the right signature can be converted to a \gocode{PolicyFunc} and thereby becomes a \gocode{Policy}. The standard library's \gocode{http.HandlerFunc} is the best-known instance of the idiom, and Part~V will use it.
+
+The constructors \gocode{DenyAuthors}, \gocode{RequireScope}, and \gocode{GateContaining} each return a policy built from a closure, a function that refers to variables of the function that created it. The closure in \gocode{DenyAuthors} captures a map of denied names, built once at construction and consulted on every call, so that the cost of building the set is paid when the policy is made and not each time a record is judged. The variables captured by a closure live as long as the closure does, and the garbage collector of Go makes that safe without the programmer managing it. One caution applies to every such construction. A closure that captures a map or slice shares it with whoever else holds it, so a policy that captured a map handed in by the caller would change behaviour if the caller later modified the map. The constructor here copies the names into a map of its own, and the habit of copying at the boundary appears again in the next chapter.
+
+\section{Composition and What It Preserves}
+
+The function \gocode{AllOf} combines any number of policies into one, and its rule is that the most restrictive verdict wins. Because the verdicts are ordered integers, the rule is the arithmetic maximum, and the implementation is a loop that keeps the largest value seen. An empty combination allows everything, which is a decision with consequences. A caller who builds a combination from a list that happens to be empty gets a policy that admits every record, and a system intended to deny by default would need to place an explicit refusal at the bottom of the list. The behaviour is documented at the function, and the command-line tool uses it deliberately, since running \gocode{golab admit} with no flags is a request to apply no rules.
+
+The following proposition records what the combinator guarantees, and the guarantees are the reason the design can be relied on when policies are assembled from several sources.
+
+\begin{proposition}\label{prop:allof}
+Let $p_1,\ldots,p_n$ be policies and let $p = \texttt{AllOf}(p_1,\ldots,p_n)$. Then for every record $r$, $p(r) = \max\{\mathrm{Allow},\, \hat p_1(r), \ldots, \hat p_n(r)\}$, where $\hat p_i(r)$ is $p_i(r)$ if that is a declared verdict and $\mathrm{Refuse}$ otherwise. Consequently (a) the result does not depend on the order in which the policies are listed or on any repetition among them, (b) for any further policy $q$, $\texttt{AllOf}(p_1,\ldots,p_n,q)(r) \ge p(r)$, and (c) a record is admitted under $p$ only if it is admitted under each $p_i$ taken alone.
+\end{proposition}
+
+\begin{proof}
+The formula is the definition of the loop. Part (a) holds because the maximum of a finite set is unchanged by reordering or repeating its members. Part (b) holds because adding a member to a set cannot lower its maximum. For (c), a record is admitted exactly when its verdict is \gocode{Allow}, the lowest value, so $p(r)=\mathrm{Allow}$ forces every $\hat p_i(r)$ to be \gocode{Allow}, and a declared $p_i(r)$ equal to \gocode{Allow} is then the verdict of $p_i$ alone.
+\end{proof}
+
+The proposition is a statement about a join-semilattice in which the policies are combined by taking the maximum, and its practical content is that adding a rule to a combination can only make the system stricter. A reader who wants to know why a record was admitted need only check that every rule individually permits it. The property is checked by tests in the next chapter, which shuffle the order of the policies and confirm that the dispositions do not change, and which add policies one at a time and confirm that the number of admitted records never rises.
+
+The first draft of \gocode{AllOf} did not contain the clause about undeclared verdicts. Its loop began at \gocode{Allow} and kept any larger value, which silently discarded a verdict below \gocode{Allow}. A policy that returned $-1$ was refused when used alone, because the conversion to a disposition falls through to the refusing default, and was ignored when used inside \gocode{AllOf}, because the maximum began at zero. A verdict above \gocode{Refuse}, such as $99$, never had this problem: it won the maximum and was then refused by the same default. The flaw was confined to values below \gocode{Allow}. The inconsistency was found while writing the proof above, when the formula for $p(r)$ could not be made to hold for all integer values, and the repair is the call to \gocode{valid} that sends any undeclared verdict to \gocode{Refuse}. The case shows a general hazard of integer vocabularies in a language without closed enumerations, and it is the reason the tests include verdicts outside the declared range on both sides.
+
+\section*{Exercises}
+
+\begin{exercise}
+Write a policy constructor \gocode{AnyOf} that returns the \emph{least} restrictive verdict of its arguments. State the algebraic properties that correspond to those of Proposition~\ref{prop:allof}, and explain why a system that combined independent authorities with \gocode{AnyOf} would be harder to audit than one that used \gocode{AllOf}.
+\end{exercise}
+
+\begin{exercise}
+Define a policy as a struct with a method instead of a closure, for instance a \gocode{Denylist} type holding a map, and show that it satisfies \gocode{Policy}. Compare the two styles with respect to inspection: which makes it easier for a program to print the rules it is applying?
+\end{exercise}
+
+\begin{exercise}
+Make \gocode{AllOf} with no arguments refuse everything, and identify every place in the module whose behaviour changes. Argue for or against the change.
+\end{exercise}
+
+\begin{exercise}
+Demonstrate the aliasing hazard described in this chapter. Write a constructor that captures a caller's slice without copying it, show a test in which later modification of the slice changes the behaviour of an already constructed policy, and then repair the constructor.
+\end{exercise}
